@@ -76,6 +76,27 @@ This makes the work split clearer:
 `scripts/analyze_switch.py` derives this contract directly from MOD0 and
 dynsym when they are present.
 
+### Exact relocation contract
+
+The same MOD0 dynamic tables also make the first loader milestone much narrower
+than a generic AArch64 ELF/NSO implementation:
+
+| module | relocations | types |
+| --- | ---: | --- |
+| `main` | 200 | 12 `R_AARCH64_GLOB_DAT`, 188 `R_AARCH64_JUMP_SLOT` |
+| `rtld` | 2 | 1 `R_AARCH64_GLOB_DAT`, 1 `R_AARCH64_JUMP_SLOT` |
+| `sdk` | 19,027 | 10,135 `R_AARCH64_ABS64`, 1,079 `R_AARCH64_GLOB_DAT`, 7,813 `R_AARCH64_JUMP_SLOT` |
+
+No other relocation type was observed in the three decoded dynamic relocation
+tables. In particular, this exact build did not expose dynamic TLS,
+`R_AARCH64_RELATIVE`, IRELATIVE or instruction-patching relocations in those
+tables. This is strong evidence that an initial loader can fail closed on
+anything outside the three observed types instead of implementing a broad
+AArch64 relocation surface speculatively.
+
+The analyzer reports these relocation tables and type counts and its synthetic
+NSO fixture tests `ABS64`, `GLOB_DAT` and `JUMP_SLOT`.
+
 ## Bloodstained reference port
 
 The supplied Bloodstained: Curse of the Moon package is not a Wine port. Its own
