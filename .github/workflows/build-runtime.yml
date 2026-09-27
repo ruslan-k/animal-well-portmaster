@@ -417,6 +417,31 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test14-15-PATCH.zip
           cat dist/Animal-Well-TSPS-test14-15-PATCH.sha256
 
+      - name: Build delta-only Xorg fix patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test14-xorg-fix/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST14-15-XORG-FIX.txt" <<'EOF'
+          Delta over the previous test14/test15 patch.
+          Only the field harness changed.
+
+          This revision:
+          - auto-detects the proven Totono private Xorg at /mnt/UDISK/xorg/usr/lib/xorg/Xorg
+          - uses the known Xorg library roots under /mnt/UDISK/xorg-libs
+          - reuses Totono's totono-fb.conf when present
+          - falls back to the generated fbdev config/system Xorg search
+          - logs all selected Xorg paths
+          - exports SDL_VIDEODRIVER=x11 after DISPLAY becomes usable
+          EOF
+          (cd dist/test14-xorg-fix && zip -qr ../Animal-Well-TSPS-test14-15-XORG-FIX.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-15-XORG-FIX.zip > Animal-Well-TSPS-test14-15-XORG-FIX.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-15-XORG-FIX.zip
+          cat dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
@@ -424,4 +449,6 @@ jobs:
             dist/test14
             dist/Animal-Well-TSPS-test14-15-PATCH.zip
             dist/Animal-Well-TSPS-test14-15-PATCH.sha256
+            dist/Animal-Well-TSPS-test14-15-XORG-FIX.zip
+            dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
           if-no-files-found: error
