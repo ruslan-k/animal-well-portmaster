@@ -27,9 +27,11 @@ The supplied Windows executable was inspected without redistribution:
 - Direct imports include `d3d12.dll`, `dxgi.dll`, `XAudio2_9.dll`,
   `XInput9_1_0.dll` and `steam_api64.dll`.
 
-A host-side Wine launch of the supplied build reaches the normal window/display
-creation boundary after loading the game, Steam API, XInput, XAudio, DXGI and
-D3D12 DLLs. Final D3D12 rendering still requires the real TSPS Mali Vulkan stack.
+A host-side Wine launch of the supplied build reaches the real
+`D3D12CreateDevice(FL11_0)` call after loading the game, Steam API, XInput,
+XAudio, DXGI and D3D12 DLLs. In the headless build container it then fails to
+create a VKD3D instance because no usable Vulkan ICD is present. Final D3D12
+rendering therefore remains a real-TSPS Mali Vulkan test.
 
 See [GAME_ANALYSIS.md](docs/GAME_ANALYSIS.md).
 
