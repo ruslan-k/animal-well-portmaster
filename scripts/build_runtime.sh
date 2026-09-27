@@ -4,7 +4,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd); WORK=${WORK:-"$ROOT/.work"}; OUT=${OUT:-
 BOX64_REF=${BOX64_REF:-v0.4.4}; WINE_VER=${WINE_VER:-11.18}; WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba}; JOBS=${JOBS:-2}
 rm -rf "$WORK" "$OUT"; mkdir -p "$WORK" "$OUT"; cp -a "$ROOT/package" "$WORK/package"; RT="$WORK/package/animalwell/runtime"; mkdir -p "$RT/box64" "$RT/wine" "$RT/backends" "$RT/tools"
 for x in git cmake curl tar xz python3 aarch64-linux-gnu-gcc x86_64-w64-mingw32-gcc; do command -v "$x" >/dev/null || { echo "missing $x" >&2; exit 2; }; done
-# Box64 ARM64 built against the CI's Bullseye cross sysroot (glibc 2.31 <= TSPS 2.33).
+# Box64 ARM64 built against the CI's Focal cross sysroot (glibc 2.31 <= TSPS 2.33).
 git clone -q --depth 1 --branch "$BOX64_REF" https://github.com/ptitSeb/box64.git "$WORK/box64"
 cat >"$WORK/toolchain.cmake" <<'TC'
 set(CMAKE_SYSTEM_NAME Linux)
@@ -15,7 +15,7 @@ cmake -S "$WORK/box64" -B "$WORK/box64-build" -DCMAKE_TOOLCHAIN_FILE="$WORK/tool
 cmake --build "$WORK/box64-build" -j"$JOBS"; cp "$WORK/box64-build/box64" "$RT/box64/box64"; cp -a "$WORK/box64/x64lib" "$RT/box64/x64lib"
 # Native Vulkan probe and x64 Windows D3D12 smoke test.
 aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o "$RT/tools/vkprobe" "$ROOT/scripts/vkprobe.c" -ldl
-x86_64-w64-mingw32-gcc -O2 -o "$RT/tools/d3d12_smoke.exe" "$ROOT/scripts/d3d12_smoke.c" -ld3d12 -ldxgi -luuid -luser32
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o "$RT/tools/d3d12_smoke.exe" "$ROOT/scripts/d3d12_smoke.c"
 # Portable x86-64 WOW64 Wine; run through Box64, no armhf host required.
 WF="wine-${WINE_VER}-amd64-wow64.tar.xz"; curl -fL --retry 5 -o "$WORK/$WF" "https://github.com/Kron4ek/Wine-Builds/releases/download/${WINE_VER}/${WF}"; echo "$WINE_SHA  $WORK/$WF"|sha256sum -c -; tar -xJf "$WORK/$WF" -C "$WORK"
 WD=$(find "$WORK" -maxdepth 1 -type d -name "wine-${WINE_VER}*wow64*"|head -1); [ -n "$WD" ] || { echo 'Wine extract dir missing' >&2; exit 3; }; cp -a "$WD"/. "$RT/wine/"

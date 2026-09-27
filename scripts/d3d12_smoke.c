@@ -1,17 +1,95 @@
-#define COBJMACROS
-#define INITGUID
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
-#include <dxgi1_4.h>
-#include <d3d12.h>
-static LRESULT CALLBACK wp(HWND h,UINT m,WPARAM w,LPARAM l){return DefWindowProcA(h,m,w,l);}
-int main(void){HRESULT hr; IDXGIFactory4*f=0; IDXGIAdapter1*a=0; ID3D12Device*d=0; ID3D12CommandQueue*q=0; IDXGISwapChain*s=0;
- hr=CreateDXGIFactory1(&IID_IDXGIFactory4,(void**)&f); printf("CreateDXGIFactory1=0x%08lx\n",(unsigned long)hr); if(FAILED(hr))return 10;
- for(UINT i=0;IDXGIFactory4_EnumAdapters1(f,i,&a)!=DXGI_ERROR_NOT_FOUND;i++){DXGI_ADAPTER_DESC1 ad; IDXGIAdapter1_GetDesc1(a,&ad); printf("adapter[%u] vendor=%04x device=%04x flags=%x\n",i,ad.VendorId,ad.DeviceId,ad.Flags); hr=D3D12CreateDevice((IUnknown*)a,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&d); printf("D3D12CreateDevice FL11_0=0x%08lx\n",(unsigned long)hr); if(SUCCEEDED(hr))break; IDXGIAdapter1_Release(a);a=0;}
- if(!d){hr=D3D12CreateDevice(0,D3D_FEATURE_LEVEL_11_0,&IID_ID3D12Device,(void**)&d);printf("D3D12CreateDevice(NULL)=0x%08lx\n",(unsigned long)hr);} if(FAILED(hr)||!d)return 11;
- D3D12_COMMAND_QUEUE_DESC qd={0};qd.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;hr=ID3D12Device_CreateCommandQueue(d,&qd,&IID_ID3D12CommandQueue,(void**)&q);printf("CreateCommandQueue=0x%08lx\n",(unsigned long)hr);if(FAILED(hr))return 12;
- HINSTANCE hi=GetModuleHandleA(0);WNDCLASSA wc={0};wc.lpfnWndProc=wp;wc.hInstance=hi;wc.lpszClassName="AWD3D12Smoke";RegisterClassA(&wc);HWND h=CreateWindowA(wc.lpszClassName,"AW smoke",WS_OVERLAPPEDWINDOW,0,0,64,64,0,0,hi,0);if(!h)return 13;
- DXGI_SWAP_CHAIN_DESC sd={0};sd.BufferDesc.Width=64;sd.BufferDesc.Height=64;sd.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;sd.SampleDesc.Count=1;sd.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;sd.BufferCount=2;sd.OutputWindow=h;sd.Windowed=TRUE;sd.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
- hr=IDXGIFactory4_CreateSwapChain(f,(IUnknown*)q,&sd,&s);printf("CreateSwapChain=0x%08lx\n",(unsigned long)hr);if(FAILED(hr))return 14;hr=IDXGISwapChain_Present(s,0,0);printf("Present=0x%08lx\n",(unsigned long)hr);
- IDXGISwapChain_Release(s);DestroyWindow(h);ID3D12CommandQueue_Release(q);ID3D12Device_Release(d);if(a)IDXGIAdapter1_Release(a);IDXGIFactory4_Release(f);return FAILED(hr)?15:0;}
+
+/*
+ * Header-independent D3D12/DXGI bootstrap probe.
+ *
+ * Ubuntu 20.04's MinGW headers predate d3d12.h.  Keeping this probe independent
+ * of the SDK is useful in its own right: it tests the exact dynamic exports the
+ * game needs without importing a host build-time D3D implementation.
+ */
+
+typedef HRESULT (WINAPI *pfn_CreateDXGIFactory1)(REFIID riid, void **factory);
+typedef HRESULT (WINAPI *pfn_D3D12CreateDevice)(void *adapter,
+                                                UINT minimum_feature_level,
+                                                REFIID riid,
+                                                void **device);
+
+static const GUID iid_idxgi_factory1 =
+    {0x770aae78,0xf26f,0x4dba,{0xa8,0x29,0x25,0x3c,0x83,0xd1,0xb3,0x87}};
+static const GUID iid_id3d12_device =
+    {0x189819f1,0x1db6,0x4b57,{0xbe,0x54,0x18,0x21,0x33,0x9b,0x85,0xf7}};
+
+static void release_com(void *object)
+{
+    typedef ULONG (STDMETHODCALLTYPE *release_fn)(void *);
+    void **vtbl;
+    if (!object)
+        return;
+    vtbl = *(void ***)object;
+    if (vtbl && vtbl[2])
+        ((release_fn)vtbl[2])(object);
+}
+
+int main(void)
+{
+    HMODULE dxgi = NULL, d3d12 = NULL;
+    pfn_CreateDXGIFactory1 create_factory;
+    pfn_D3D12CreateDevice create_device;
+    void *factory = NULL, *device = NULL;
+    HRESULT hr;
+
+    printf("ANIMAL WELL D3D12 bootstrap smoke\n");
+    printf("requested_feature_level=0x%04x (D3D_FEATURE_LEVEL_11_0)\n", 0xb000);
+
+    dxgi = LoadLibraryA("dxgi.dll");
+    if (!dxgi) {
+        printf("LoadLibrary(dxgi.dll) failed=%lu\n", (unsigned long)GetLastError());
+        return 10;
+    }
+    d3d12 = LoadLibraryA("d3d12.dll");
+    if (!d3d12) {
+        printf("LoadLibrary(d3d12.dll) failed=%lu\n", (unsigned long)GetLastError());
+        FreeLibrary(dxgi);
+        return 11;
+    }
+
+    create_factory = (pfn_CreateDXGIFactory1)(void *)
+        GetProcAddress(dxgi, "CreateDXGIFactory1");
+    create_device = (pfn_D3D12CreateDevice)(void *)
+        GetProcAddress(d3d12, "D3D12CreateDevice");
+    printf("CreateDXGIFactory1=%s\n", create_factory ? "present" : "missing");
+    printf("D3D12CreateDevice=%s\n", create_device ? "present" : "missing");
+    if (!create_factory || !create_device) {
+        FreeLibrary(d3d12);
+        FreeLibrary(dxgi);
+        return 12;
+    }
+
+    hr = create_factory(&iid_idxgi_factory1, &factory);
+    printf("CreateDXGIFactory1 hr=0x%08lx ptr=%p\n",
+           (unsigned long)hr, factory);
+    if (FAILED(hr) || !factory) {
+        FreeLibrary(d3d12);
+        FreeLibrary(dxgi);
+        return 13;
+    }
+
+    hr = create_device(NULL, 0xb000, &iid_id3d12_device, &device);
+    printf("D3D12CreateDevice(NULL, FL11_0) hr=0x%08lx ptr=%p\n",
+           (unsigned long)hr, device);
+    if (FAILED(hr) || !device) {
+        release_com(factory);
+        FreeLibrary(d3d12);
+        FreeLibrary(dxgi);
+        return 14;
+    }
+
+    release_com(device);
+    release_com(factory);
+    FreeLibrary(d3d12);
+    FreeLibrary(dxgi);
+    puts("D3D12 bootstrap smoke: PASS");
+    return 0;
+}
