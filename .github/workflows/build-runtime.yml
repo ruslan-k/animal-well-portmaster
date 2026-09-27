@@ -1,0 +1,41 @@
+name: build-runtime
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Focal/glibc-2.31 toolchain image
+        run: docker build -f Dockerfile.64 -t animal-well-runtime:focal .
+
+      - name: Build runtime
+        run: |
+          mkdir -p dist
+          docker run --rm \
+            -e OUT=/out \
+            -v "$PWD/dist:/out" \
+            animal-well-runtime:focal
+
+      - name: Verify artifact
+        run: |
+          test -s dist/animal-well-runtime-aarch64.tar.xz
+          test -s dist/animal-well-runtime-aarch64.tar.xz.sha256
+          cat dist/reports/glibc-audit.txt
+          cat dist/reports/runtime-smoke.txt
+          sha256sum -c dist/animal-well-runtime-aarch64.tar.xz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animal-well-runtime-aarch64
+          path: |
+            dist/animal-well-runtime-aarch64.tar.xz
+            dist/animal-well-runtime-aarch64.tar.xz.sha256
+            dist/reports/
