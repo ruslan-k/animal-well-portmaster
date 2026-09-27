@@ -20,13 +20,17 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          # Bullseye is archived; use matching archived main + security repositories.
+          # Freeze Bullseye at its final LTS date. The live bullseye-security
+          # repository is in an EOL transition and is not reproducible.
           printf '%s\n' \
-            'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
-            'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+            'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260831/ bullseye main' \
+            'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260831/ bullseye-security main' \
             > /etc/apt/sources.list
           rm -f /etc/apt/sources.list.d/*
-          printf '%s\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive
+          printf '%s\n' \
+            'Acquire::Check-Valid-Until "false";' \
+            'Acquire::Retries "5";' \
+            > /etc/apt/apt.conf.d/99snapshot
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
       - uses: actions/checkout@v4
