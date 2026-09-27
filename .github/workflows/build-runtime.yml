@@ -239,7 +239,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates git cmake make pkg-config python3 file binutils zip \
+            ca-certificates git cmake make pkg-config python3 file binutils zip unzip \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
             wayland-protocols libwayland-bin \
             libvulkan-dev:arm64 libx11-dev:arm64 libx11-xcb-dev:arm64 \
@@ -386,7 +386,7 @@ jobs:
             }
           }
           EOF
-          printf 'mode=mali-wrapper-xlib-wsi\nwrapper=zeyadadev/mali-vulkan-icd-wrapper\nforce_presenter=SHM\nmali_driver=/usr/lib/libmali.so.0\n' >dist/test14/MANIFEST.txt
+          printf 'mode=mali-wrapper-xlib-wsi\nwrapper=zeyadadev/mali-vulkan-icd-wrapper\nforce_presenter=SHM\nmali_driver=libmali.so.0-via-LD_LIBRARY_PATH\n' >dist/test14/MANIFEST.txt
           bash scripts/check-abi.sh dist/test14 2>&1 | tee dist/test14/abi-report.txt
 
       - name: Build installable TSPS test14/test15 patch
