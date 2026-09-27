@@ -149,14 +149,12 @@ jobs:
         run: |
           set -euo pipefail
           git clone -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
-          cmake -S /tmp/Vulkan-Headers -B /tmp/Vulkan-Headers/build \
-            -DCMAKE_INSTALL_PREFIX=/opt/khronos -DVULKAN_HEADERS_ENABLE_TESTS=OFF
-          cmake --build /tmp/Vulkan-Headers/build --target install
-
           git clone -q --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/SPIRV-Headers
-          cmake -S /tmp/SPIRV-Headers -B /tmp/SPIRV-Headers/build \
-            -DCMAKE_INSTALL_PREFIX=/opt/khronos
-          cmake --build /tmp/SPIRV-Headers/build --target install
+          mkdir -p /opt/khronos/include
+          cp -a /tmp/Vulkan-Headers/include/. /opt/khronos/include/
+          cp -a /tmp/SPIRV-Headers/include/. /opt/khronos/include/
+          test -f /opt/khronos/include/vulkan/vulkan.h
+          test -d /opt/khronos/include/spirv
 
       - name: Build standalone vkd3d 2.1
         shell: bash
