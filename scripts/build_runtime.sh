@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd); WORK=${WORK:-"$ROOT/.work"}; OUT=${OUT:-"$ROOT/dist"}
-BOX64_REF=${BOX64_REF:-v0.4.4}; WINE_VER=${WINE_VER:-11.18}; WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba}; JOBS=${JOBS:-2}; PREFIX_IMAGE_MB=${PREFIX_IMAGE_MB:-640}
+BOX64_REF=${BOX64_REF:-v0.4.4}; WINE_VER=${WINE_VER:-11.18}; WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba}; JOBS=${JOBS:-2}; PREFIX_IMAGE_MB=${PREFIX_IMAGE_MB:-1024}
 rm -rf "$WORK" "$OUT"; mkdir -p "$WORK" "$OUT"; cp -a "$ROOT/package" "$WORK/package"; RT="$WORK/package/animalwell/runtime"; mkdir -p "$RT/box64" "$RT/wine" "$RT/backends" "$RT/tools"
 for x in git cmake curl tar xz python3 aarch64-linux-gnu-gcc x86_64-w64-mingw32-gcc readelf file mke2fs e2fsck debugfs truncate; do command -v "$x" >/dev/null || { echo "missing $x" >&2; exit 2; }; done
 
@@ -45,7 +45,7 @@ WD=$(find "$WORK" -maxdepth 1 -type d -name "wine-${WINE_VER}*wow64*"|head -1); 
 
 # SpruceOS lives on a FAT32 SD card, but Wine prefixes require symlinks in
 # dosdevices/. Build the exact Wine 11.18 prefix on Linux and package it in an
-# ext2 filesystem image. The launcher loop-mounts this image while the game runs.
+$ ext2 filesystem image. The launcher loop-mounts this image while the game runs.
 PFXSRC="$WORK/prefix-root"
 PFXIMG="$WORK/package/animalwell/prefix.ext2"
 rm -rf "$PFXSRC"; mkdir -p "$PFXSRC"

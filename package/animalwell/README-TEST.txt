@@ -12,6 +12,9 @@ Expected layout:
   Roms/ports/animalwell/prefix.ext2
   Roms/ports/animalwell/runtime/...
 
+Disk space:
+  Keep at least about 2 GiB free after extraction; prefix.ext2 is a 1 GiB persistent Wine filesystem image.
+
 Normal launch:
   Run "Animal Well" from Ports/PortMaster.
 
