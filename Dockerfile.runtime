@@ -1,0 +1,116 @@
+FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG BOX64_REF=906dc9636d95df0be311bedcde632f2d3a1fdcf9
+ARG WINE_REF=wine-11.0
+ARG VKD3D_OLD_TAG=v2.14.1
+ARG VKD3D_NEW_TAG=v3.0.1
+ARG DXVK_OLD_TAG=v2.3.1
+ARG DXVK_NEW_TAG=v2.6.2
+
+# SpruceOS 64-bit baseline: build native ARM64 ELF against glibc 2.31 or older.
+# Ubuntu 20.04/focal is intentionally used because it ships glibc 2.31.
+RUN dpkg --add-architecture arm64 && \
+    sed -i 's/^deb http/deb [arch=amd64] http/g' /etc/apt/sources.list && \
+    printf '%s\n' \
+      'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse' \
+      'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse' \
+      'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse' \
+      >> /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates curl jq file binutils xz-utils zstd unzip \
+      python3 python3-pip ninja-build pkg-config bison flex \
+      gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+      gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+      libx11-dev libxext-dev libxrender-dev libxrandr-dev libxfixes-dev \
+      libxi-dev libxinerama-dev libxcursor-dev libxcomposite-dev \
+      libfreetype6-dev libfontconfig1-dev libvulkan-dev libasound2-dev \
+      libfaudio-dev libudev-dev libjpeg-dev libpng-dev zlib1g-dev \
+      libfaudio0:arm64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Current Box64 requires newer CMake than focal's distro version. This affects only
+# the build container, not the ABI of the produced ARM64 ELF files.
+RUN pip3 install --no-cache-dir 'cmake==3.28.6' 'meson==1.5.2'
+
+RUN cat > /tmp/aarch64-toolchain.cmake <<'EOF2'
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR aarch64)
+set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+set(CMAKE_ASM_COMPILER aarch64-linux-gnu-gcc)
+set(CMAKE_FIND_ROOT_PATH /usr/aarch64-linux-gnu /usr/lib/aarch64-linux-gnu /usr)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
+EOF2
+
+# Box64: generic ARMv8 target, memory-saving dynarec for the ~1 GiB TSPS memory budget.
+RUN git init /src/box64 && cd /src/box64 && \
+    git remote add origin https://github.com/ptitSeb/box64.git && \
+    git fetch --depth 1 origin "${BOX64_REF}" && git checkout FETCH_HEAD && \
+    cmake -S . -B build \
+      -DCMAKE_TOOLCHAIN_FILE=/tmp/aarch64-toolchain.cmake \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DARM64=ON -DSAVE_MEM=ON -DNO_CONF_INSTALL=ON -DNO_LIB_INSTALL=ON \
+      -DCMAKE_C_FLAGS='-O2 -pipe -march=armv8-a+crc+simd' && \
+    cmake --build build -j"$(nproc)" && \
+    cmake --install build --prefix /stage/box64
+
+# Wine x86-64 is built on focal as well. Although it runs through Box64, keeping its
+# ELF symbol requirements conservative makes failures much easier to reason about.
+RUN git clone --depth 1 --branch "${WINE_REF}" https://github.com/wine-mirror/wine.git /src/wine && \
+    mkdir -p /src/wine-build && cd /src/wine-build && \
+    ../wine/configure \
+      --prefix=/opt/animalwell/wine \
+      --enable-win64 \
+      --without-cups --without-dbus --without-gphoto --without-gstreamer \
+      --without-krb5 \
+      --without-pulse \
+      --without-sane --without-usb && \
+    make -j"$(nproc)" && \
+    make install DESTDIR=/stage
+
+RUN mkdir -p /out/runtime/{box64,wine,backends,native-libs} && \
+    cp -a /stage/box64/. /out/runtime/box64/ && \
+    cp -a /stage/opt/animalwell/wine/. /out/runtime/wine/ && \
+    cp -a /usr/lib/aarch64-linux-gnu/libFAudio.so.0* /out/runtime/native-libs/
+
+# Release helper: resolve a binary asset by tag and regex instead of hard-coding
+# asset file names. The payloads are Windows PE DLLs, so they do not add a Linux
+# glibc runtime requirement.
+RUN cat > /usr/local/bin/fetch-release-asset <<'EOF2'
+#!/usr/bin/env bash
+set -euo pipefail
+repo="$1"; tag="$2"; pattern="$3"; out="$4"
+api="https://api.github.com/repos/${repo}/releases/tags/${tag}"
+url="$(curl -fsSL "$api" | jq -r --arg p "$pattern" '.assets[] | select(.name | test($p)) | .browser_download_url' | head -n1)"
+[ -n "$url" ] && [ "$url" != null ] || { echo "No matching asset for $repo $tag / $pattern" >&2; exit 1; }
+curl -fL --retry 4 --retry-delay 2 "$url" -o "$out"
+EOF2
+RUN chmod +x /usr/local/bin/fetch-release-asset
+
+RUN set -eux; \
+    fetch-release-asset HansKristian-Work/vkd3d-proton "$VKD3D_OLD_TAG" 'x86_64.*tar|vkd3d-proton.*tar' /tmp/vkd-old.tar.zst; \
+    mkdir -p /out/runtime/backends/vkd3d-proton-2.14.1; \
+    tar --zstd -xf /tmp/vkd-old.tar.zst -C /out/runtime/backends/vkd3d-proton-2.14.1 --strip-components=1; \
+    fetch-release-asset HansKristian-Work/vkd3d-proton "$VKD3D_NEW_TAG" 'x86_64.*tar|vkd3d-proton.*tar' /tmp/vkd-new.tar.zst; \
+    mkdir -p /out/runtime/backends/vkd3d-proton-3.0.1; \
+    tar --zstd -xf /tmp/vkd-new.tar.zst -C /out/runtime/backends/vkd3d-proton-3.0.1 --strip-components=1; \
+    fetch-release-asset doitsujin/dxvk "$DXVK_OLD_TAG" 'dxvk.*tar\\.gz' /tmp/dxvk-old.tar.gz; \
+    mkdir -p /out/runtime/backends/dxvk-2.3.1; \
+    tar -xzf /tmp/dxvk-old.tar.gz -C /out/runtime/backends/dxvk-2.3.1 --strip-components=1; \
+    fetch-release-asset doitsujin/dxvk "$DXVK_NEW_TAG" 'dxvk.*tar\\.gz' /tmp/dxvk-new.tar.gz; \
+    mkdir -p /out/runtime/backends/dxvk-2.6.2; \
+    tar -xzf /tmp/dxvk-new.tar.gz -C /out/runtime/backends/dxvk-2.6.2 --strip-components=1
+
+RUN printf '%s\n' \
+    "BOX64_REF=${BOX64_REF}" \
+    "WINE_REF=${WINE_REF}" \
+    "VKD3D_OLD_TAG=${VKD3D_OLD_TAG}" \
+    "VKD3D_NEW_TAG=${VKD3D_NEW_TAG}" \
+    "DXVK_OLD_TAG=${DXVK_OLD_TAG}" \
+    "DXVK_NEW_TAG=${DXVK_NEW_TAG}" \
+    "GLIBC_BUILD_BASELINE=2.31" \
+    > /out/runtime/BUILDINFO
