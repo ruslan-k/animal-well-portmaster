@@ -139,8 +139,9 @@ jobs:
           printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates git curl xz-utils make cmake pkg-config gcc g++ \
-            libvulkan-dev libx11-dev libxcb1-dev libxext-dev file binutils
+            ca-certificates git curl xz-utils make cmake pkg-config gcc g++ bison flex \
+            libjson-perl wine64-tools libvulkan-dev libx11-dev libxcb1-dev libxext-dev \
+            file binutils
 
       - uses: actions/checkout@v4
 
