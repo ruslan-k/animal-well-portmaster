@@ -27,6 +27,10 @@ The supplied Windows executable was inspected without redistribution:
 - Direct imports include `d3d12.dll`, `dxgi.dll`, `XAudio2_9.dll`,
   `XInput9_1_0.dll` and `steam_api64.dll`.
 
+A host-side Wine launch of the supplied build reaches the normal window/display
+creation boundary after loading the game, Steam API, XInput, XAudio, DXGI and
+D3D12 DLLs. Final D3D12 rendering still requires the real TSPS Mali Vulkan stack.
+
 See [GAME_ANALYSIS.md](docs/GAME_ANALYSIS.md).
 
 ### 2. Native Switch build research
@@ -39,6 +43,12 @@ loader with NVN-to-GLES2 translation rather than Wine or full Switch emulation.
 Static comparison is encouraging: 475 of 536 NVN entry-point names visible in
 ANIMAL WELL's `main` have wrapper-name analogues in the Bloodstained shim.
 This is an upper-bound name comparison, not proof that every name is executed.
+
+The public NextOS framework provides reusable pieces such as `nxloader`,
+`nxgl`, `nxinput`, `nxaudio`, `nxextract` and a reproducible
+Vulkan/SPIR-V -> GLES2 shader-translation laboratory. ANIMAL WELL still needs a
+game-specific Switch NSO mapper/relocator plus explicit `nn::*`, NVN and GLSLC
+adapters; the Bloodstained binary is not a drop-in loader.
 
 See [SWITCH_ANALYSIS.md](docs/SWITCH_ANALYSIS.md) and
 `scripts/analyze_switch.py`.
@@ -54,8 +64,28 @@ CI rejects a runtime if any bundled ELF requires:
 - `GLIBC > 2.31`
 - `GLIBCXX > 3.4.28`
 
-This includes Box64, native probes, Wine ELF files and bundled ELF libraries.
-The device's Vulkan loader/ICD remains device-provided.
+This includes Box64, native probes, Wine ELF files and bundled x86-64 helper
+libraries. The device's Vulkan loader/ICD remains device-provided.
+
+Box64's upstream `x64lib/` directory is deliberately **not** bundled wholesale:
+it contains convenience binaries produced on mixed/newer distributions. The
+runtime copies only the guest helper libraries needed by the Wine path
+(`libgcc_s.so.1`, `libstdc++.so.6`, `libunwind.so.8`) from the same
+Ubuntu 20.04 build root, and then subjects them to the same ABI scan.
+
+## Reproducible build
+
+GitHub Actions uses an Ubuntu 20.04 job container. A matching local build root is
+provided as `Dockerfile.64`:
+
+```sh
+docker build -f Dockerfile.64 -t animalwell-runtime:focal .
+mkdir -p dist
+docker run --rm \
+  -e OUT=/out \
+  -v "$PWD/dist:/out" \
+  animalwell-runtime:focal
+```
 
 ## Build and testing
 
@@ -64,10 +94,11 @@ GitHub Actions:
 1. runs Python and shell tests;
 2. builds the ARM64 host pieces on the focal/glibc-2.31 baseline;
 3. scans **every shipped ELF** with `readelf --version-info`;
-4. verifies ARM64/PE file formats;
-5. starts Box64 under QEMU as a host-loader smoke test;
-6. verifies the artifact contains no proprietary game/Switch binaries;
-7. uploads the runtime, hashes, QEMU log and complete ABI report.
+4. fails the workflow if any ELF exceeds either ABI ceiling;
+5. verifies ARM64/PE file formats and that bundled helper ELFs are x86-64;
+6. starts Box64 under QEMU as a host-loader smoke test;
+7. verifies the artifact contains no proprietary game/Switch binaries;
+8. uploads the runtime, hashes, QEMU log and complete ABI report.
 
 The runtime also includes:
 
