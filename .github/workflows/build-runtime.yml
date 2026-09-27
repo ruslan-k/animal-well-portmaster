@@ -14,6 +14,7 @@ jobs:
           bash -n scripts/build_runtime.sh
           bash -n scripts/check-abi.sh
           sh -n 'package/Animal Well.sh'
+          sh -n 'package/Animal Well Diagnose.sh'
           sh -n package/animalwell/diagnose.sh
 
       - name: Prove ABI gate fails closed
@@ -43,7 +44,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates git curl xz-utils zstd zip make cmake python3 python3-pip \
-            file binutils gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            file binutils e2fsprogs gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 \
             libvulkan-dev libunwind8 libstdc++6
           python3 -m pip install --no-cache-dir cmake==3.27.9
@@ -63,15 +64,19 @@ jobs:
           mkdir -p dist
           bash scripts/check-abi.sh "$RT" 2>&1 | tee dist/abi-report.txt
 
-      - name: Validate formats and ARM64 loader
+      - name: Validate formats, prefix image and ARM64 loader
         shell: bash
         run: |
           set -euo pipefail
           RT=.work/package/animalwell/runtime
-          file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe"
+          PFX=.work/package/animalwell/prefix.ext2
+          file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe" "$PFX"
           file "$RT/box64/box64" | grep -q 'ARM aarch64'
           file "$RT/tools/vkprobe" | grep -q 'ARM aarch64'
           file "$RT/tools/d3d12_smoke.exe" | grep -q 'PE32+'
+          file "$PFX" | grep -qi 'ext2 filesystem'
+          grep -q 'Type: regular' dist/prefix-debugfs.txt
+          grep -q 'Type: symlink' dist/prefix-debugfs.txt
           for f in "$RT"/box64/x64lib/*.so*; do
             file "$f"
             file "$f" | grep -q 'x86-64'
@@ -93,4 +98,8 @@ jobs:
             dist/box64-glibc-symbols.txt
             dist/abi-report.txt
             dist/box64-qemu.log
+            dist/prefix-wineboot.log
+            dist/prefix-e2fsck.txt
+            dist/prefix-debugfs.txt
+            dist/prefix-sha256.txt
           if-no-files-found: error
