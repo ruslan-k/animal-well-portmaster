@@ -32,7 +32,9 @@ jobs:
             'Acquire::Retries "5";' \
             > /etc/apt/apt.conf.d/99snapshot
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 python3-pip file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
+          python3 -m pip install --no-cache-dir cmake==3.27.9
+          cmake --version
       - uses: actions/checkout@v4
       - name: Build
         run: JOBS=2 bash scripts/build_runtime.sh
