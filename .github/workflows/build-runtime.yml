@@ -124,3 +124,94 @@ jobs:
             dist/prefix-wineboot.log
             dist/prefix-sanity.log
           if-no-files-found: error
+
+
+  build-test13-direct-vkd3d:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install Focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl xz-utils make cmake pkg-config gcc g++ \
+            libvulkan-dev libx11-dev libxcb1-dev libxext-dev file binutils
+
+      - uses: actions/checkout@v4
+
+      - name: Install current Vulkan and SPIR-V headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          cmake -S /tmp/Vulkan-Headers -B /tmp/Vulkan-Headers/build \
+            -DCMAKE_INSTALL_PREFIX=/opt/khronos -DVULKAN_HEADERS_ENABLE_TESTS=OFF
+          cmake --build /tmp/Vulkan-Headers/build --target install
+
+          git clone -q --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/SPIRV-Headers
+          cmake -S /tmp/SPIRV-Headers -B /tmp/SPIRV-Headers/build \
+            -DCMAKE_INSTALL_PREFIX=/opt/khronos
+          cmake --build /tmp/SPIRV-Headers/build --target install
+
+      - name: Build standalone vkd3d 2.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 -o /tmp/vkd3d-2.1.tar.xz \
+            https://dl.winehq.org/vkd3d/source/vkd3d-2.1.tar.xz
+          tar -xJf /tmp/vkd3d-2.1.tar.xz -C /tmp
+          cd /tmp/vkd3d-2.1
+          CPPFLAGS="-I/opt/khronos/include" \
+            ./configure --prefix=/opt/vkd3d --disable-tests --disable-demos
+          make -j4
+          make install
+
+      - name: Build direct VKD3D probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/test13/lib
+          pc=
+          for d in /opt/vkd3d/lib/pkgconfig /opt/vkd3d/lib64/pkgconfig; do
+            [ -f "$d/vkd3d.pc" ] && pc="$d" && break
+          done
+          [ -n "$pc" ] || { echo "vkd3d.pc not found" >&2; find /opt/vkd3d -maxdepth 4 -type f -print; exit 2; }
+          export PKG_CONFIG_PATH="$pc"
+          gcc -O2 -Wall -Wextra -o dist/test13/vkd3d_direct_probe \
+            scripts/vkd3d_direct_probe.c $(pkg-config --cflags --libs vkd3d)
+          cp -a /opt/vkd3d/lib*/libvkd3d.so* dist/test13/lib/ 2>/dev/null || true
+          cp -a /opt/vkd3d/lib*/libvkd3d-shader.so* dist/test13/lib/ 2>/dev/null || true
+          cp -a /opt/vkd3d/lib*/libvkd3d-utils.so* dist/test13/lib/ 2>/dev/null || true
+          test -x dist/test13/vkd3d_direct_probe
+          test -e dist/test13/lib/libvkd3d.so.1
+          file dist/test13/vkd3d_direct_probe dist/test13/lib/*.so*
+          ldd dist/test13/vkd3d_direct_probe | tee dist/test13/ldd.txt
+          readelf -d dist/test13/vkd3d_direct_probe > dist/test13/readelf.txt
+          printf 'vkd3d=2.1\nmode=direct-no-wine-no-dxgi-no-wsi\nbuild_glibc=2.31\n' > dist/test13/MANIFEST.txt
+
+      - name: Validate test13 ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-abi.sh dist/test13 2>&1 | tee dist/test13/abi-report.txt
+
+      - name: Host smoke for binary/linkage only
+        shell: bash
+        run: |
+          set +e
+          LD_LIBRARY_PATH="$PWD/dist/test13/lib" VKD3D_DEBUG=info \
+            ./dist/test13/vkd3d_direct_probe >dist/test13/host-run.log 2>&1
+          echo "host_exit=$?" >>dist/test13/host-run.log
+          cat dist/test13/host-run.log
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test13-direct-vkd3d
+          path: dist/test13
+          if-no-files-found: error
