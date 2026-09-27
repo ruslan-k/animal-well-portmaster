@@ -31,7 +31,7 @@ RUN dpkg --add-architecture arm64 && \
 
 # Current Box64 requires newer CMake than focal's distro version. This affects only
 # the build container, not the ABI of the produced ARM64 ELF files.
-RUN pip3 install --no-cache-dir 'cmake==3.28.6' 'meson==1.5.2'
+RUN pip3 install --no-cache-dir 'cmake==3.28.4' 'meson==1.5.2'
 
 RUN cat > /tmp/aarch64-toolchain.cmake <<'EOF2'
 set(CMAKE_SYSTEM_NAME Linux)
