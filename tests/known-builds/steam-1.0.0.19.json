@@ -1,0 +1,21 @@
+{
+  "product": "ANIMAL WELL",
+  "store": "Steam",
+  "app_id": 813230,
+  "file_version": "1.0.0.19",
+  "exe": {
+    "name": "Animal Well.exe",
+    "size": 34535424,
+    "sha256": "48c8044d5ffd8cfc2abc73eeb9d15e9e6f196fbd7a744ea41d965bcc7f237bb1",
+    "pe_timestamp_utc": "2024-06-13T23:02:09Z",
+    "machine": "x86-64",
+    "subsystem": "Windows GUI"
+  },
+  "steam_api64_sha256": "286f2ed575fb16bba9c451bdf5c8738b5aa6587ec7831830cfae1739c6347edd",
+  "direct_imports": [
+    "KERNEL32.dll", "ole32.dll", "USER32.dll", "SHELL32.dll", "WINSPOOL.DRV",
+    "PROPSYS.dll", "steam_api64.dll", "XINPUT9_1_0.dll", "XAudio2_9.dll",
+    "d3d12.dll", "dxgi.dll", "XPSPRINT.DLL", "WINMM.dll", "HID.DLL", "SETUPAPI.dll"
+  ],
+  "notes": "Metadata only. No proprietary game files are stored in this repository."
+}
