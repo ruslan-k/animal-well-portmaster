@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT=.work/package/animalwell
+          ROOT="$(pwd)/.work/package/animalwell"
           RT="$ROOT/runtime"
           T="$ROOT/prefix-template"
           P=/tmp/animalwell-ci-prefix
