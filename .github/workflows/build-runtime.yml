@@ -16,6 +16,18 @@ jobs:
           sh -n 'package/Animal Well.sh'
           sh -n package/animalwell/diagnose.sh
 
+      - name: Prove ABI gate fails closed
+        run: |
+          set -o pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          cp /bin/ls "$tmp/too-new-for-zero-ceiling"
+          if MAX_GLIBC=0.0 MAX_GLIBCXX=0.0 bash scripts/check-abi.sh "$tmp" 2>&1 | tee "$tmp/negative.log"; then
+            echo "ERROR: ABI checker unexpectedly accepted a deliberately impossible ceiling" >&2
+            exit 1
+          fi
+          grep -q 'ABI check: FAIL' "$tmp/negative.log"
+
   build-aarch64-runtime:
     runs-on: ubuntu-latest
     # Match SpruceOS' 64-bit compatibility baseline: Ubuntu 20.04 ships glibc 2.31.
