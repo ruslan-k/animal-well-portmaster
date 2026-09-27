@@ -35,7 +35,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
       - uses: actions/checkout@v4
       - name: Build
-        run: JOBS=2 scripts/build_runtime.sh
+        run: JOBS=2 bash scripts/build_runtime.sh
       - name: Validate formats and target ABI
         run: |
           RT=.work/package/animalwell/runtime
