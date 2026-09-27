@@ -37,7 +37,7 @@ jobs:
           cmake --version
       - uses: actions/checkout@v4
       - name: Build
-        run: JOBS=2 bash scripts/build_runtime.sh
+        run: JOBS=4 bash scripts/build_runtime.sh
       - name: Validate formats and target ABI
         run: |
           RT=.work/package/animalwell/runtime
