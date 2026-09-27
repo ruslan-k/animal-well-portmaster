@@ -39,7 +39,7 @@ def make_nso(path: Path):
 def make_dynamic_nso(path: Path):
     text = bytearray(0x100)
     ro = bytearray(0x800)
-    data = bytearray(0x200)
+    data = bytearray(0x300)
     text[:4] = b"TEXT"
 
     mod0_va = 0x1000 + 0x20
@@ -66,12 +66,27 @@ def make_dynamic_nso(path: Path):
     struct.pack_into("<IBBHQQ", ro, symtab_va - 0x1000 + 48,
                      off_hid, 0x12, 0, 0, 0, 0)
 
+    rela_va = 0x2100
+    jmprel_va = 0x2160
+    struct.pack_into("<QQq", data, rela_va - 0x2000,
+                     0x3000, (1 << 32) | 1025, 0)
+    struct.pack_into("<QQq", data, rela_va - 0x2000 + 24,
+                     0x3008, (2 << 32) | 257, 0)
+    struct.pack_into("<QQq", data, jmprel_va - 0x2000,
+                     0x3010, (2 << 32) | 1026, 0)
+
     entries = [
         (mod.DT_HASH, hash_va),
         (mod.DT_SYMTAB, symtab_va),
         (mod.DT_SYMENT, 24),
         (mod.DT_STRTAB, strtab_va),
         (mod.DT_STRSZ, len(strtab)),
+        (mod.DT_RELA, rela_va),
+        (mod.DT_RELASZ, 48),
+        (mod.DT_RELAENT, 24),
+        (mod.DT_JMPREL, jmprel_va),
+        (mod.DT_PLTRELSZ, 24),
+        (mod.DT_PLTREL, mod.DT_RELA),
         (mod.DT_NULL, 0),
     ]
     for i, (tag, value) in enumerate(entries):
@@ -107,6 +122,17 @@ class SwitchAnalyzerTests(unittest.TestCase):
             self.assertEqual(dyn["nn_namespace_counts"], {"hid": 1})
             self.assertEqual(dyn["direct_graphics_imports"], ["nvnBootstrapLoader"])
             self.assertIn("_ZN2nn3hid14InitializeNpadEv", dyn["dynamic_imports"])
+            reloc = dyn["relocations"]
+            self.assertEqual(reloc["total"], 3)
+            self.assertEqual(reloc["type_counts"], {
+                "R_AARCH64_ABS64": 1,
+                "R_AARCH64_GLOB_DAT": 1,
+                "R_AARCH64_JUMP_SLOT": 1,
+            })
+            self.assertEqual(reloc["symbolic_type_counts"], reloc["type_counts"])
+            self.assertEqual(reloc["unknown_type_counts"], {})
+            self.assertEqual([t["kind"] for t in reloc["tables"]],
+                             ["RELA", "JMPREL/RELA"])
 
     def test_lz4_literal_only_block(self):
         payload = b"hello"
