@@ -177,12 +177,12 @@ jobs:
           mkdir -p dist/test13/lib
           pc=
           for d in /opt/vkd3d/lib/pkgconfig /opt/vkd3d/lib64/pkgconfig; do
-            [ -f "$d/vkd3d.pc" ] && pc="$d" && break
+            [ -f "$d/libvkd3d.pc" ] && pc="$d" && break
           done
-          [ -n "$pc" ] || { echo "vkd3d.pc not found" >&2; find /opt/vkd3d -maxdepth 4 -type f -print; exit 2; }
+          [ -n "$pc" ] || { echo "libvkd3d.pc not found" >&2; find /opt/vkd3d -maxdepth 4 -type f -print; exit 2; }
           export PKG_CONFIG_PATH="$pc"
           gcc -O2 -Wall -Wextra -o dist/test13/vkd3d_direct_probe \
-            scripts/vkd3d_direct_probe.c $(pkg-config --cflags --libs vkd3d)
+            scripts/vkd3d_direct_probe.c $(pkg-config --cflags --libs libvkd3d)
           cp -a /opt/vkd3d/lib*/libvkd3d.so* dist/test13/lib/ 2>/dev/null || true
           cp -a /opt/vkd3d/lib*/libvkd3d-shader.so* dist/test13/lib/ 2>/dev/null || true
           cp -a /opt/vkd3d/lib*/libvkd3d-utils.so* dist/test13/lib/ 2>/dev/null || true
