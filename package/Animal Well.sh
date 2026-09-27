@@ -44,6 +44,9 @@ log() { echo "[$(stamp)] $*"; }
 
 setup_portmaster() {
     [ -n "${BASH_VERSION:-}" ] || return 0
+    # PortMaster's control.txt/device_info helpers are not nounset-safe.
+    # Temporarily disable `set -u` while sourcing the framework, then restore it.
+    set +u
     controlfolder="${controlfolder:-}"
     if [ -z "$controlfolder" ]; then
         for c in             /mnt/SDCARD/Apps/PortMaster/PortMaster             /PortMaster             /opt/system/Tools/PortMaster             /opt/tools/PortMaster             "${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster"             /roms/ports/PortMaster             /mnt/SDCARD/Roms/ports/PortMaster; do
@@ -66,6 +69,7 @@ setup_portmaster() {
     else
         log "PortMaster control.txt not found; using standalone launcher path"
     fi
+    set -u
 }
 
 acquire_lock() {
