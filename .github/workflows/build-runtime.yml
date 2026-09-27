@@ -20,6 +20,10 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
+          # Bullseye is archived; avoid stale security mirror metadata in the old base image.
+          printf '%s\n' 'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' > /etc/apt/sources.list
+          rm -f /etc/apt/sources.list.d/*
+          printf '%s\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
       - uses: actions/checkout@v4
