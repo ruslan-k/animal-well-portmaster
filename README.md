@@ -1,35 +1,80 @@
 # ANIMAL WELL PortMaster runtime experiment
 
-Experimental PortMaster runtime for running the Windows x86-64 build of **ANIMAL WELL** on ARM64 handhelds, initially targeting TrimUI Smart Pro S / SpruceOS.
+Experimental PortMaster work for **ANIMAL WELL** on ARM64 handhelds, initially
+targeting TrimUI Smart Pro S / SpruceOS.
 
-The repository intentionally does **not** contain game files. Put a legally obtained Windows build in `package/animalwell/game/` before testing on-device.
+The repository intentionally does **not** contain game files.
 
-## Runtime strategy
+## Two runtime tracks
 
-The project tests three D3D12 paths:
+### 1. Windows x86-64 build
 
-1. Wine built-in VKD3D (`backend=wine`) — preferred compatibility baseline.
-2. vkd3d-proton 2.6 (`backend=vkd3d-2.6`) — older Vulkan 1.1-era compatibility fallback.
-3. vkd3d-proton 3.0.1 (`backend=vkd3d-3.0.1`) — current strict reference implementation.
+The existing prototype runs the Windows build through Box64 + Wine and tests
+three D3D12 paths:
 
-The Windows x86-64 executable and Wine are run through Box64 on the ARM64 host. Vulkan is provided by the device's native ARM64 driver.
+1. Wine built-in VKD3D (`backend=wine`) — compatibility baseline.
+2. vkd3d-proton 2.6 (`backend=vkd3d-2.6`).
+3. vkd3d-proton 3.0.1 (`backend=vkd3d-3.0.1`) — stricter reference path.
 
-## Known game binary characteristics
+Vulkan is supplied by the handheld's native ARM64 driver.
 
-The supplied 2024 Steam executable was inspected without redistributing it. See [`docs/GAME_ANALYSIS.md`](docs/GAME_ANALYSIS.md).
+The supplied Windows executable was inspected without redistribution:
 
-Key findings:
+- PE32+ x86-64.
+- Requests `D3D_FEATURE_LEVEL_11_0` (`0xb000`).
+- 46 valid embedded DXBC containers: 45 pixel + 1 vertex.
+- All detected shaders are Shader Model 5.0; no DXIL was found.
+- Direct imports include `d3d12.dll`, `dxgi.dll`, `XAudio2_9.dll`,
+  `XInput9_1_0.dll` and `steam_api64.dll`.
 
-- PE32+ x86-64 Windows GUI executable.
-- Requests `D3D_FEATURE_LEVEL_11_0` (`0xb000`) when creating the D3D12 device.
-- 46 valid embedded DXBC containers: 45 pixel shaders + 1 vertex shader.
-- All detected shaders are Shader Model 5.0; no DXIL containers were found.
-- Direct imports include `d3d12.dll`, `dxgi.dll`, `XAudio2_9.dll`, `XInput9_1_0.dll`, and `steam_api64.dll`.
+See [GAME_ANALYSIS.md](docs/GAME_ANALYSIS.md).
 
-These properties make the game substantially more plausible on a limited D3D12/Vulkan stack than a typical modern SM6/DXIL title.
+### 2. Native Switch build research
+
+The user-supplied merged Switch build was also inspected. It contains
+`rtld + main + sdk` NSO modules. A supplied Bloodstained: Curse of the Moon
+port demonstrates a different architecture: a custom native AArch64 guest
+loader with NVN-to-GLES2 translation rather than Wine or full Switch emulation.
+
+Static comparison is encouraging: 475 of 536 NVN entry-point names visible in
+ANIMAL WELL's `main` have wrapper-name analogues in the Bloodstained shim.
+This is an upper-bound name comparison, not proof that every name is executed.
+
+See [SWITCH_ANALYSIS.md](docs/SWITCH_ANALYSIS.md) and
+`scripts/analyze_switch.py`.
+
+## SpruceOS / glibc compatibility policy
+
+All Linux ELF files shipped in the runtime are checked, not just the main
+launcher. The build job uses **Ubuntu 20.04 / glibc 2.31**, matching the
+compatibility strategy used by SpruceOS' 64-bit ScummVM build.
+
+CI rejects a runtime if any bundled ELF requires:
+
+- `GLIBC > 2.31`
+- `GLIBCXX > 3.4.28`
+
+This includes Box64, native probes, Wine ELF files and bundled ELF libraries.
+The device's Vulkan loader/ICD remains device-provided.
 
 ## Build and testing
 
-GitHub Actions builds a self-contained runtime artifact. ARM64 tools are cross-built against a Debian Bullseye sysroot to keep glibc requirements compatible with glibc 2.33-class systems. The artifact includes a Vulkan capability probe and a Windows D3D12/DXGI smoke test that mirrors the game's FL11_0 bootstrap.
+GitHub Actions:
 
-Final GPU validation still has to run on the actual Mali-G57 device because CI/QEMU cannot reproduce the TSPS vendor Vulkan stack.
+1. runs Python and shell tests;
+2. builds the ARM64 host pieces on the focal/glibc-2.31 baseline;
+3. scans **every shipped ELF** with `readelf --version-info`;
+4. verifies ARM64/PE file formats;
+5. starts Box64 under QEMU as a host-loader smoke test;
+6. verifies the artifact contains no proprietary game/Switch binaries;
+7. uploads the runtime, hashes, QEMU log and complete ABI report.
+
+The runtime also includes:
+
+- a native ARM64 Vulkan capability/descriptor probe;
+- an x86-64 Windows D3D12/DXGI smoke test that mirrors the game's FL11_0
+  bootstrap;
+- on-device diagnostic collection for the real Mali-G57 Vulkan stack.
+
+A green CI result proves build/ABI integrity, not final GPU compatibility. Real
+D3D12/NVN rendering still needs the TSPS hardware stack.

@@ -12,39 +12,56 @@ jobs:
       - run: python3 -m unittest discover -s tests -v
       - run: |
           bash -n scripts/build_runtime.sh
+          bash -n scripts/check-abi.sh
           sh -n 'package/Animal Well.sh'
           sh -n package/animalwell/diagnose.sh
+
   build-aarch64-runtime:
     runs-on: ubuntu-latest
-    container: debian:bullseye
+    # Match SpruceOS' 64-bit compatibility baseline: Ubuntu 20.04 ships glibc 2.31.
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
     steps:
-      - name: Install dependencies
+      - name: Install focal build dependencies
         run: |
-          # Freeze Bullseye at its final LTS date. The live bullseye-security
-          # repository is in an EOL transition and is not reproducible.
-          printf '%s\n' \
-            'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260831/ bullseye main' \
-            'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260831/ bullseye-security main' \
-            > /etc/apt/sources.list
-          rm -f /etc/apt/sources.list.d/*
-          printf '%s\n' \
-            'Acquire::Check-Valid-Until "false";' \
-            'Acquire::Retries "5";' \
-            > /etc/apt/apt.conf.d/99snapshot
+          export DEBIAN_FRONTEND=noninteractive
+          printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 python3-pip file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl xz-utils zstd zip make cmake python3 python3-pip \
+            file binutils gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 \
+            libvulkan-dev
           python3 -m pip install --no-cache-dir cmake==3.27.9
           cmake --version
+          ldd --version | head -n1
+
       - uses: actions/checkout@v4
+
       - name: Build
         run: JOBS=4 bash scripts/build_runtime.sh
-      - name: Validate formats and target ABI
+
+      - name: Validate every shipped ELF against SpruceOS ABI ceiling
+        run: |
+          RT=.work/package/animalwell/runtime
+          mkdir -p dist
+          bash scripts/check-abi.sh "$RT" | tee dist/abi-report.txt
+
+      - name: Validate formats and ARM64 loader
         run: |
           RT=.work/package/animalwell/runtime
           file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe"
-          qemu-aarch64 -L /usr/aarch64-linux-gnu "$RT/box64/box64" -v || true
-          cat dist/compatibility.txt
-          cat dist/box64-glibc-symbols.txt
+          file "$RT/box64/box64" | grep -q 'ARM aarch64'
+          file "$RT/tools/vkprobe" | grep -q 'ARM aarch64'
+          file "$RT/tools/d3d12_smoke.exe" | grep -q 'PE32+'
+          qemu-aarch64 -L /usr/aarch64-linux-gnu "$RT/box64/box64" -v 2>&1 | tee dist/box64-qemu.log
+
+      - name: Verify game-free artifact
+        run: |
+          ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-portmaster-runtime
@@ -54,4 +71,6 @@ jobs:
             dist/compatibility.txt
             dist/box64-readelf.txt
             dist/box64-glibc-symbols.txt
+            dist/abi-report.txt
+            dist/box64-qemu.log
           if-no-files-found: error
