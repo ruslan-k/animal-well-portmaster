@@ -20,3 +20,26 @@ Disassembly of the renderer bootstrap shows `mov edx, 0xb000` immediately before
 The executable contains 46 structurally valid DXBC containers and no DXIL signatures: 45 pixel shaders and 1 vertex shader, all Shader Model 5.0. Embedded diagnostics show conventional D3D12 usage: `CreateDXGIFactory1`, swapchain creation, direct command queue/list, committed resources, fence, query heap, root signature creation and `D3D_ROOT_SIGNATURE_VERSION_1_0` serialization.
 
 This is a much smaller compatibility target than a modern SM6/DXIL D3D12 title. The main unknown is the actual TSPS Vulkan feature/descriptor surface, so the runtime includes a native ARM64 Vulkan probe and a Windows D3D12 smoke test.
+
+## Host Wine launch probe
+
+The exact supplied game build was also launched with the runtime's Wine 11.18
+under an Xvfb display on an x86-64 Linux host. This is deliberately a loader/API
+smoke test, not a substitute for the TSPS GPU.
+
+Observed progression:
+
+1. the game executable starts and loads its native `steam_api64.dll`;
+2. Wine loads XInput, XAudio2, DXGI and D3D12;
+3. ANIMAL WELL calls `D3D12CreateDevice` with minimum feature level
+   `0xb000` (FL11_0), matching the static disassembly;
+4. DXGI creates a factory and enumerates the only host adapter exposed by this
+   container, llvmpipe;
+5. device creation stops at Wine VKD3D initialization with
+   `0x80004005` because this container has a Vulkan loader but no usable Vulkan
+   ICD.
+
+That failure is useful isolation: the supplied PE reaches the real D3D12 device
+bootstrap without an earlier Wine/Steam/DLL failure. The next graphics test must
+run with a real Vulkan implementation, ideally the TSPS Mali-G57 stack collected
+by the on-device diagnostic harness.
