@@ -1,0 +1,28 @@
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Focal is intentional: glibc 2.31 is the oldest 64-bit SpruceOS baseline
+# we support. Native ARM64 runtime objects must not require newer GLIBC_*.
+RUN dpkg --add-architecture arm64 && \
+    sed -i 's/^deb http/deb [arch=amd64] http/g' /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse" >> /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+      binutils binutils-aarch64-linux-gnu cmake ninja-build pkg-config \
+      git ca-certificates curl wget python3 python3-pip file \
+      qemu-user-static patchelf ccache flex bison \
+      meson glslang-tools mingw-w64 \
+      libx11-dev libxext-dev libxrender-dev libxrandr-dev libxi-dev \
+      libxcursor-dev libxfixes-dev libxinerama-dev libxxf86vm-dev \
+      libvulkan-dev libasound2-dev libfreetype6-dev libfontconfig1-dev \
+      libx11-dev:arm64 libxext-dev:arm64 libvulkan-dev:arm64 libasound2-dev:arm64 \
+      && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/ /src/scripts/
+RUN chmod +x /src/scripts/*.sh
+
+WORKDIR /work
+ENTRYPOINT ["/src/scripts/build-runtime.sh"]
