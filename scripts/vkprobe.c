@@ -3,6 +3,11 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <vulkan/vulkan.h>
+#ifndef VK_API_VERSION_MAJOR
+#define VK_API_VERSION_MAJOR VK_VERSION_MAJOR
+#define VK_API_VERSION_MINOR VK_VERSION_MINOR
+#define VK_API_VERSION_PATCH VK_VERSION_PATCH
+#endif
 static int has(const VkExtensionProperties*e,uint32_t n,const char*s){for(uint32_t i=0;i<n;i++)if(!strcmp(e[i].extensionName,s))return 1;return 0;}
 int main(void){void*l=dlopen("libvulkan.so.1",RTLD_NOW|RTLD_LOCAL);if(!l){fprintf(stderr,"FAIL dlopen: %s\n",dlerror());return 2;}PFN_vkGetInstanceProcAddr g=(PFN_vkGetInstanceProcAddr)dlsym(l,"vkGetInstanceProcAddr");if(!g)return 2;PFN_vkEnumerateInstanceVersion ev=(PFN_vkEnumerateInstanceVersion)g(0,"vkEnumerateInstanceVersion");uint32_t lv=VK_API_VERSION_1_0;if(ev)ev(&lv);printf("loader_api=%u.%u.%u\n",VK_API_VERSION_MAJOR(lv),VK_API_VERSION_MINOR(lv),VK_API_VERSION_PATCH(lv));
  VkApplicationInfo ai={.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,.pApplicationName="animalwell-vkprobe",.apiVersion=lv};VkInstanceCreateInfo ci={.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&ai};PFN_vkCreateInstance cr=(PFN_vkCreateInstance)g(0,"vkCreateInstance");VkInstance in=0;VkResult vr=cr(&ci,0,&in);if(vr!=VK_SUCCESS){printf("FAIL vkCreateInstance=%d\n",vr);return 3;}
