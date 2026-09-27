@@ -1,0 +1,75 @@
+name: build-and-test-runtime
+
+on:
+  push:
+    branches: [main, 'runtime/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build focal/glibc-2.31 runtime
+        run: docker build --progress=plain -f Dockerfile.runtime -t animalwell-runtime .
+
+      - name: Extract runtime
+        run: |
+          cid=$(docker create animalwell-runtime)
+          docker cp "$cid:/out" ./out
+          docker rm "$cid"
+
+      - name: Verify Linux ABI ceiling
+        env:
+          MAX_GLIBC: '2.31'
+          MAX_GLIBCXX: '3.4.28'
+        run: bash scripts/check-abi.sh out/runtime
+
+      - name: Verify expected runtime payload
+        run: |
+          set -euxo pipefail
+          test -x out/runtime/box64/bin/box64
+          test -x out/runtime/wine/bin/wine
+          test -f out/runtime/backends/vkd3d-proton-2.14.1/x64/d3d12.dll
+          test -f out/runtime/backends/vkd3d-proton-3.0.1/x64/d3d12.dll
+          test -f out/runtime/backends/dxvk-2.3.1/x64/dxgi.dll
+          test -f out/runtime/backends/dxvk-2.6.2/x64/dxgi.dll
+          file out/runtime/box64/bin/box64 | grep -q 'ARM aarch64'
+          file out/runtime/wine/bin/wine | grep -q 'x86-64'
+          file out/runtime/backends/vkd3d-proton-2.14.1/x64/d3d12.dll | grep -q 'PE32+'
+
+      - name: ARM64 loader smoke test under QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static libc6-arm64-cross
+          qemu-aarch64-static -L /usr/aarch64-linux-gnu out/runtime/box64/bin/box64 -v 2>&1 | tee box64-qemu.log
+
+      - name: Build PortMaster payload
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/animalwell/game
+          cp -a package/animalwell/. dist/animalwell/
+          cp -a out/runtime dist/animalwell/runtime
+          cp package/animalwell.sh dist/animalwell.sh
+          chmod +x dist/animalwell.sh dist/animalwell/launch.sh dist/animalwell/diagnose.sh
+          printf 'Copy Animal Well.exe, steam_api64.dll and steam_appid.txt here.\n' > dist/animalwell/game/PUT_GAME_FILES_HERE.txt
+          cp tests/known-builds/steam-1.0.0.19.json dist/animalwell/KNOWN_GAME_BUILD.json
+          (cd dist && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          tar -C dist -I 'zstd -19 -T0' -cf animal-well-portmaster-runtime.tar.zst .
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: animal-well-portmaster-runtime
+          path: |
+            animal-well-portmaster-runtime.tar.zst
+            dist/SHA256SUMS
+            box64-qemu.log
+          if-no-files-found: error
+          retention-days: 14
