@@ -257,6 +257,25 @@ jobs:
           git clone -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
           mkdir -p /opt/khronos/include /opt/khronos/lib/pkgconfig
           cp -a /tmp/Vulkan-Headers/include/. /opt/khronos/include/
+          mkdir -p /opt/khronos/include/linux
+          cat >/opt/khronos/include/linux/dma-heap.h <<'EOF'
+          /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+          #ifndef _UAPI_LINUX_DMABUF_POOL_H
+          #define _UAPI_LINUX_DMABUF_POOL_H
+          #include <linux/ioctl.h>
+          #include <linux/types.h>
+          #define DMA_HEAP_VALID_FD_FLAGS (O_CLOEXEC | O_ACCMODE)
+          #define DMA_HEAP_VALID_HEAP_FLAGS (0ULL)
+          struct dma_heap_allocation_data {
+              __u64 len;
+              __u32 fd;
+              __u32 fd_flags;
+              __u64 heap_flags;
+          };
+          #define DMA_HEAP_IOC_MAGIC 'H'
+          #define DMA_HEAP_IOCTL_ALLOC _IOWR(DMA_HEAP_IOC_MAGIC, 0x0, struct dma_heap_allocation_data)
+          #endif
+          EOF
           cat >/opt/khronos/lib/pkgconfig/vulkan.pc <<'EOF'
           prefix=/usr
           exec_prefix=${prefix}
