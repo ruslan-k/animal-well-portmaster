@@ -247,8 +247,11 @@ prepare_smoke_backend() {
     case "$backend" in
         wine)
             WINEDLLOVERRIDES="d3d12=b;d3d12core=b;$base_overrides"
+            VKD3D_CONFIG=virtual_heaps
+            export VKD3D_CONFIG
             ;;
         vkd3d-2.6|vkd3d-3.0.1)
+            unset VKD3D_CONFIG 2>/dev/null || true
             SRC="$RT/backends/$backend/x64"
             [ -f "$SRC/d3d12.dll" ] || return 1
             cp "$SRC/d3d12.dll" "$SDIR/d3d12.dll"
@@ -266,8 +269,11 @@ prepare_game_backend() {
     case "$backend" in
         wine)
             WINEDLLOVERRIDES="d3d12=b;d3d12core=b;$base_overrides"
+            VKD3D_CONFIG=virtual_heaps
+            export VKD3D_CONFIG
             ;;
         vkd3d-2.6|vkd3d-3.0.1)
+            unset VKD3D_CONFIG 2>/dev/null || true
             SRC="$RT/backends/$backend/x64"
             [ -f "$SRC/d3d12.dll" ] || return 1
             cp "$SRC/d3d12.dll" "$GAME/d3d12.dll"
