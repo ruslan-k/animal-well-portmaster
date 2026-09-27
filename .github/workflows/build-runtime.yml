@@ -305,6 +305,47 @@ jobs:
           if n != 1:
               raise SystemExit('failed to patch old-libdrm modifier path')
           p.write_text(ns)
+
+          p=Path('/tmp/mali-wrapper/src/wsi/x11/swapchain.cpp')
+          s=p.read_text()
+          old='''   WSIALLOC_ASSERT_VERSION();
+   if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)
+   {
+      WSI_LOG_ERROR("Failed to create wsi allocator.");
+      return VK_ERROR_INITIALIZATION_FAILED;
+   }
+
+   const bool force_shm = env_var_is_enabled(std::getenv("WSI_X11_FORCE_SHM"));
+   const bool force_bridge = env_var_is_enabled(std::getenv("WSI_X11_FORCE_BRIDGE"));
+'''
+          new='''   const bool force_shm = env_var_is_enabled(std::getenv("WSI_X11_FORCE_SHM"));
+
+   /*
+    * Forced SHM presentation does not use wsialloc/DMA-BUF memory.  Some
+    * embedded Mali systems (including TSPS/Spruce) do not expose the
+    * upstream default /dev/dma_heap/system-uncached node.  Requiring
+    * wsialloc_new() here therefore rejects a perfectly usable SHM path
+    * before the SHM presenter is even initialized.
+    */
+   if (!force_shm)
+   {
+      WSIALLOC_ASSERT_VERSION();
+      if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)
+      {
+         WSI_LOG_ERROR("Failed to create wsi allocator.");
+         return VK_ERROR_INITIALIZATION_FAILED;
+      }
+   }
+   else
+   {
+      WSI_LOG_INFO("WSI_X11_FORCE_SHM: skipping unused wsialloc/DMA-BUF allocator initialization.");
+   }
+
+   const bool force_bridge = env_var_is_enabled(std::getenv("WSI_X11_FORCE_BRIDGE"));
+'''
+          if old not in s:
+              raise SystemExit('failed to find X11 wsialloc init block')
+          p.write_text(s.replace(old,new,1))
           PY
           cat >/tmp/aarch64-toolchain.cmake <<'EOF'
           set(CMAKE_SYSTEM_NAME Linux)
@@ -442,6 +483,35 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test14-15-XORG-FIX.zip
           cat dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
 
+      - name: Build delta-only forced-SHM allocator fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test14-shm-alloc-fix/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          cat >"$D/TEST14-SHM-ALLOC-FIX.txt" <<'EOF'
+          Delta over the previous test14/test15 + Xorg-fix patches.
+
+          Only the Mali wrapper binary changed.
+
+          Fix:
+          - when WSI_X11_FORCE_SHM=1, skip wsialloc_new()
+          - the forced SHM path does not use DMA-BUF/wsialloc
+          - this avoids a false failure when /dev/dma_heap/system-uncached is absent
+          - DRI3/bridge behavior is unchanged and still requires wsialloc
+
+          Re-run:
+            ./test14-15-wsi.sh test14
+
+          Only run test15 after:
+            TEST14_RESULT=PASS_XLIB_SWAPCHAIN
+          EOF
+          (cd dist/test14-shm-alloc-fix && zip -qr ../Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip > Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip
+          cat dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
@@ -451,4 +521,6 @@ jobs:
             dist/Animal-Well-TSPS-test14-15-PATCH.sha256
             dist/Animal-Well-TSPS-test14-15-XORG-FIX.zip
             dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
+            dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip
+            dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
           if-no-files-found: error
