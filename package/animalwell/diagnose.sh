@@ -96,14 +96,12 @@ if mount_prefix; then
         run_timeout wine-version 15 "$BOX64" "$WINE" --version || true
         for b in wine vkd3d-2.6 vkd3d-3.0.1; do
             SYS="$WINEPREFIX/drive_c/windows/system32"; mkdir -p "$SYS"
+            SRC="$RT/backends/$b/x64"; [ -f "$SRC/d3d12.dll" ] || continue
             rm -f "$SYS/d3d12.dll" "$SYS/d3d12core.dll"
+            cp "$SRC/d3d12.dll" "$SYS/d3d12.dll"
+            [ ! -f "$SRC/d3d12core.dll" ] || cp "$SRC/d3d12core.dll" "$SYS/d3d12core.dll"
             O="winemenubuilder.exe=d;mscoree=d;mshtml=d"
-            if [ "$b" != wine ]; then
-                SRC="$RT/backends/$b/x64"; [ -f "$SRC/d3d12.dll" ] || continue
-                cp "$SRC/d3d12.dll" "$SYS/d3d12.dll"
-                [ ! -f "$SRC/d3d12core.dll" ] || cp "$SRC/d3d12core.dll" "$SYS/d3d12core.dll"
-                O="d3d12=n,b;d3d12core=n,b;$O"
-            fi
+            if [ "$b" != wine ]; then O="d3d12=n,b;d3d12core=n,b;$O"; fi
             export WINEDLLOVERRIDES="$O" WINEDEBUG=-all VKD3D_DEBUG=info
             run_timeout "d3d12-$b" 20 "$BOX64" "$WINE" "$RT/tools/d3d12_smoke.exe" || true
         done

@@ -54,6 +54,14 @@ export WINEDLLOVERRIDES='winemenubuilder.exe=d;mscoree=d;mshtml=d'
 "$WD/bin/wine" wineboot -u >"$OUT/prefix-wineboot.log" 2>&1 || { cat "$OUT/prefix-wineboot.log" >&2; exit 5; }
 "$WD/bin/wineserver" -w >>"$OUT/prefix-wineboot.log" 2>&1 || true
 [ -f "$PFXSRC/system.reg" ] || { echo 'Wine prefix system.reg missing' >&2; exit 5; }
+# Keep pristine copies of Wine's own D3D12 PE DLLs so changing experimental
+# backends never destroys the built-in Wine fallback inside the persistent prefix.
+mkdir -p "$RT/backends/wine/x64"
+for dll in d3d12.dll d3d12core.dll; do
+  [ -f "$PFXSRC/drive_c/windows/system32/$dll" ] || { echo "Wine prefix missing $dll" >&2; exit 5; }
+  cp "$PFXSRC/drive_c/windows/system32/$dll" "$RT/backends/wine/x64/$dll"
+done
+sha256sum "$RT/backends/wine/x64"/*.dll >"$RT/backends/wine/SHA256SUMS"
 # Make the image writable even on CFWs that launch PortMaster as a non-root user.
 find "$PFXSRC" -type d -exec chmod 0777 {} +
 find "$PFXSRC" -type f -exec chmod a+rw {} +

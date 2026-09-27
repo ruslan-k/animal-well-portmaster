@@ -220,17 +220,15 @@ export WINEDEBUG=${WINEDEBUG:--all}
 
 SYS="$WINEPREFIX/drive_c/windows/system32"
 mkdir -p "$SYS"
+SRC="$RT/backends/$BACKEND/x64"
+[ -f "$SRC/d3d12.dll" ] || { log "ERROR missing $SRC/d3d12.dll"; exit 22; }
 rm -f "$SYS/d3d12.dll" "$SYS/d3d12core.dll"
+cp "$SRC/d3d12.dll" "$SYS/d3d12.dll"
+[ ! -f "$SRC/d3d12core.dll" ] || cp "$SRC/d3d12core.dll" "$SYS/d3d12core.dll"
 OVERRIDES="winemenubuilder.exe=d;mscoree=d;mshtml=d"
 case "$BACKEND" in
     wine) ;;
-    vkd3d-2.6|vkd3d-3.0.1)
-        SRC="$RT/backends/$BACKEND/x64"
-        [ -f "$SRC/d3d12.dll" ] || { log "ERROR missing $SRC/d3d12.dll"; exit 22; }
-        cp "$SRC/d3d12.dll" "$SYS/d3d12.dll"
-        [ ! -f "$SRC/d3d12core.dll" ] || cp "$SRC/d3d12core.dll" "$SYS/d3d12core.dll"
-        OVERRIDES="d3d12=n,b;d3d12core=n,b;$OVERRIDES"
-        ;;
+    vkd3d-2.6|vkd3d-3.0.1) OVERRIDES="d3d12=n,b;d3d12core=n,b;$OVERRIDES" ;;
 esac
 export WINEDLLOVERRIDES="$OVERRIDES"
 
