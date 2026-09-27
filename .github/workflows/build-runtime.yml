@@ -1,0 +1,44 @@
+name: build-runtime
+on:
+  push:
+    branches: [main, 'work/**']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s tests -v
+      - run: |
+          bash -n scripts/build_runtime.sh
+          sh -n 'package/Animal Well.sh'
+          sh -n package/animalwell/diagnose.sh
+  build-aarch64-runtime:
+    runs-on: ubuntu-latest
+    container: debian:bullseye
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git curl xz-utils zstd zip make cmake python3 file binutils gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 libvulkan-dev
+      - uses: actions/checkout@v4
+      - name: Build
+        run: JOBS=2 scripts/build_runtime.sh
+      - name: Validate formats and target ABI
+        run: |
+          RT=.work/package/animalwell/runtime
+          file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe"
+          qemu-aarch64 -L /usr/aarch64-linux-gnu "$RT/box64/box64" -v || true
+          cat dist/compatibility.txt
+          cat dist/box64-glibc-symbols.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-portmaster-runtime
+          path: |
+            dist/animalwell-portmaster-runtime.zip
+            dist/SHA256SUMS
+            dist/compatibility.txt
+            dist/box64-readelf.txt
+            dist/box64-glibc-symbols.txt
+          if-no-files-found: error
