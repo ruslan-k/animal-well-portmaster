@@ -239,7 +239,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates git cmake make pkg-config python3 file binutils \
+            ca-certificates git cmake make pkg-config python3 file binutils zip \
             gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
             wayland-protocols libwayland-bin \
             libvulkan-dev:arm64 libx11-dev:arm64 libx11-xcb-dev:arm64 \
@@ -323,7 +323,7 @@ jobs:
             -DBUILD_HUD=OFF -DBUILD_TESTING=OFF -DINSTALL_ICDS=OFF \
             -DBUILD_WSI_X11=ON -DBUILD_WSI_WAYLAND=OFF -DBUILD_WSI_HEADLESS=ON \
             -DENABLE_WAYLAND_FIFO_PRESENTATION_THREAD=OFF \
-            -DMALI_DRIVER_PATH_64=/usr/lib/libmali.so.0 \
+            -DMALI_DRIVER_PATH_64=libmali.so.0 \
             -DVULKAN_REGISTRY_XML=/tmp/Vulkan-Headers/registry/vk.xml
           cmake --build /tmp/mali-wrapper-build -j4
 
@@ -389,8 +389,39 @@ jobs:
           printf 'mode=mali-wrapper-xlib-wsi\nwrapper=zeyadadev/mali-vulkan-icd-wrapper\nforce_presenter=SHM\nmali_driver=/usr/lib/libmali.so.0\n' >dist/test14/MANIFEST.txt
           bash scripts/check-abi.sh dist/test14 2>&1 | tee dist/test14/abi-report.txt
 
+      - name: Build installable TSPS test14/test15 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH=dist/test14-device/animalwell
+          mkdir -p "$PATCH/runtime/test14"
+          cp -a dist/test14/. "$PATCH/runtime/test14/"
+          cp package/animalwell/test14-15-wsi.sh "$PATCH/test14-15-wsi.sh"
+          chmod +x "$PATCH/test14-15-wsi.sh" "$PATCH/runtime/test14/vk_wsi_xlib_probe"
+          cat >"$PATCH/TEST14-15-README.txt" <<'EOF'
+          ANIMAL WELL TSPS WSI field patch
+
+          Overlay the animalwell/ directory onto the existing port.
+
+          Run native WSI test first:
+            ./test14-15-wsi.sh test14
+
+          Only if test14 reports PASS_XLIB_SWAPCHAIN, run Wine integration:
+            ./test14-15-wsi.sh test15
+
+          Neither mode launches Animal Well itself.
+          Logs are written under animalwell/logs/.
+          EOF
+          (cd dist/test14-device && zip -qr ../Animal-Well-TSPS-test14-15-PATCH.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-15-PATCH.zip > Animal-Well-TSPS-test14-15-PATCH.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-15-PATCH.zip
+          cat dist/Animal-Well-TSPS-test14-15-PATCH.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
-          path: dist/test14
+          path: |
+            dist/test14
+            dist/Animal-Well-TSPS-test14-15-PATCH.zip
+            dist/Animal-Well-TSPS-test14-15-PATCH.sha256
           if-no-files-found: error
