@@ -112,7 +112,7 @@ command -v sha256sum >/dev/null 2>&1 && sha256sum "$GAME/Animal Well.exe" "$GAME
 command -v dmesg >/dev/null 2>&1 && dmesg 2>/dev/null | tail -300 >"$OUT/dmesg-tail.log" || true
 
 BUNDLE="$LOGDIR/diagnostics-$STAMP.tar.gz"
-if command -v tar >/dev/null 2>&1 && tar -czf "$BUNDLE" -C "$LOGDIR" "diag-$STAMP" 2>/dev/null; then
+if command -v tar >/dev/null 2>&1 && tar -caf "$BUNDLE" -C "$LOGDIR" "diag-$STAMP" 2>/dev/null; then
     echo "$BUNDLE"
 else
     echo "$OUT"
