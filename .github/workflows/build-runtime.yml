@@ -31,7 +31,6 @@ jobs:
 
   build-aarch64-runtime:
     runs-on: ubuntu-latest
-    # Match SpruceOS' 64-bit compatibility baseline: Ubuntu 20.04 ships glibc 2.31.
     container: ubuntu:20.04
     env:
       MAX_GLIBC: '2.31'
@@ -44,7 +43,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates git curl xz-utils zstd zip make cmake python3 python3-pip \
-            file binutils e2fsprogs gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            file binutils gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 \
             libvulkan-dev libunwind8 libstdc++6
           python3 -m pip install --no-cache-dir cmake==3.27.9
@@ -64,24 +63,48 @@ jobs:
           mkdir -p dist
           bash scripts/check-abi.sh "$RT" 2>&1 | tee dist/abi-report.txt
 
-      - name: Validate formats, prefix image and ARM64 loader
+      - name: Validate formats and ARM64 loader
         shell: bash
         run: |
           set -euo pipefail
           RT=.work/package/animalwell/runtime
-          PFX=.work/package/animalwell/prefix.ext2
-          file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe" "$PFX"
+          file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe"
           file "$RT/box64/box64" | grep -q 'ARM aarch64'
           file "$RT/tools/vkprobe" | grep -q 'ARM aarch64'
           file "$RT/tools/d3d12_smoke.exe" | grep -q 'PE32+'
-          file "$PFX" | grep -qi 'ext2 filesystem'
-          grep -q 'Type: regular' dist/prefix-debugfs.txt
-          grep -q 'Type: symlink' dist/prefix-debugfs.txt
           for f in "$RT"/box64/x64lib/*.so*; do
             file "$f"
             file "$f" | grep -q 'x86-64'
           done
           qemu-aarch64 -L /usr/aarch64-linux-gnu "$RT/box64/box64" -v 2>&1 | tee dist/box64-qemu.log
+
+      - name: Validate lightweight Wine prefix layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=.work/package/animalwell
+          RT="$ROOT/runtime"
+          T="$ROOT/prefix-template"
+          P=/tmp/animalwell-ci-prefix
+          rm -rf "$P"
+          mkdir -p "$P/dosdevices" "$P/drive_c/windows" "$P/drive_c/users" \
+            "$P/drive_c/Program Files" "$P/drive_c/Program Files (x86)" \
+            "$P/drive_c/ProgramData" "$P/drive_c/windows/temp"
+          cp "$T/system.reg" "$P/system.reg"
+          cp "$T/user.reg" "$P/user.reg"
+          cp "$T/userdef.reg" "$P/userdef.reg"
+          cp "$T/.update-timestamp" "$P/.update-timestamp"
+          ln -s ../drive_c "$P/dosdevices/c:"
+          ln -s / "$P/dosdevices/z:"
+          ln -s "$RT/wine/lib/wine/x86_64-windows" "$P/drive_c/windows/system32"
+          ln -s "$RT/wine/lib/wine/i386-windows" "$P/drive_c/windows/syswow64"
+          mkdir -p /tmp/animalwell-ci-user
+          ln -s /tmp/animalwell-ci-user "$P/drive_c/users/root"
+          test -f "$P/drive_c/windows/system32/kernel32.dll"
+          WINEPREFIX="$P" WINEARCH=win64 WINEDEBUG=-all \
+            WINEDLLOVERRIDES='winemenubuilder.exe=d;mscoree=d;mshtml=d' \
+            "$RT/wine/bin/wine" cmd /c ver 2>&1 | tee dist/prefix-sanity.log
+          grep -q 'Microsoft Windows' dist/prefix-sanity.log
 
       - name: Verify game-free artifact
         run: |
@@ -99,7 +122,5 @@ jobs:
             dist/abi-report.txt
             dist/box64-qemu.log
             dist/prefix-wineboot.log
-            dist/prefix-e2fsck.txt
-            dist/prefix-debugfs.txt
-            dist/prefix-sha256.txt
+            dist/prefix-sanity.log
           if-no-files-found: error
