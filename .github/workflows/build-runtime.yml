@@ -20,8 +20,11 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          # Bullseye is archived; avoid stale security mirror metadata in the old base image.
-          printf '%s\n' 'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' > /etc/apt/sources.list
+          # Bullseye is archived; use matching archived main + security repositories.
+          printf '%s\n' \
+            'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
+            'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
+            > /etc/apt/sources.list
           rm -f /etc/apt/sources.list.d/*
           printf '%s\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive
           apt-get update
