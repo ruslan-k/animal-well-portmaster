@@ -15,6 +15,9 @@ LOG="$LOGDIR/${MODE}-$STAMP.log"
 XCONF="/tmp/animalwell-test14-xorg.conf"
 XORG_PID=""
 XORG_STARTED=0
+XORG_SOURCE=""
+XORG_CONFIG=""
+XORG_LD_PATH=""
 MALIDIR="/tmp/animalwell-mali-driver"
 ICD="/tmp/animalwell-mali-wrapper-$$.json"
 PFX="/tmp/animalwell-test15-prefix"
@@ -91,30 +94,97 @@ EndSection
 EOF
 }
 ensure_display() {
-    if [ -n "${DISPLAY:-}" ] && display_usable "$DISPLAY"; then log "using inherited DISPLAY=$DISPLAY"; return 0; fi
+    if [ -n "${DISPLAY:-}" ] && display_usable "$DISPLAY"; then
+        log "using inherited DISPLAY=$DISPLAY"
+        export SDL_VIDEODRIVER=x11
+        return 0
+    fi
     for d in :0 :1; do
-        if display_usable "$d"; then DISPLAY="$d"; export DISPLAY; log "using existing DISPLAY=$DISPLAY"; return 0; fi
+        if display_usable "$d"; then
+            DISPLAY="$d"; export DISPLAY
+            export SDL_VIDEODRIVER=x11
+            log "using existing DISPLAY=$DISPLAY"
+            return 0
+        fi
     done
+
     XORG=""
-    for x in "$(command -v Xorg 2>/dev/null || true)" /usr/bin/Xorg /usr/bin/X /usr/trimui/bin/Xorg /mnt/SDCARD/spruce/bin64/Xorg; do
-        [ -n "$x" ] && [ -x "$x" ] && { XORG="$x"; break; }
-    done
-    [ -n "$XORG" ] || { log "ERROR no Xorg found"; return 1; }
+    PRIVATE_XORG=/mnt/UDISK/xorg/usr/lib/xorg/Xorg
+    if [ -x "$PRIVATE_XORG" ]; then
+        XORG="$PRIVATE_XORG"
+        XORG_SOURCE=totono-private
+        for d in \
+            /mnt/UDISK/xorg-libs/lib/aarch64-linux-gnu \
+            /mnt/UDISK/xorg-libs/usr/lib/aarch64-linux-gnu \
+            /mnt/UDISK/xorg/usr/lib/aarch64-linux-gnu; do
+            [ -d "$d" ] && XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$d"
+        done
+
+        for t in \
+            /mnt/SDCARD/Roms/PORTS/you-and-me-and-her/totono-runtime \
+            /mnt/SDCARD/Roms/ports/you-and-me-and-her/totono-runtime \
+            /mnt/sdcard/mmcblk1p1/Roms/ports/you-and-me-and-her/totono-runtime; do
+            [ -d "$t/arm64-libs/gl" ] && XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$t/arm64-libs/gl"
+            [ -d "$t/arm64-libs" ] && XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$t/arm64-libs"
+            if [ -f "$t/totono-fb.conf" ] && [ -z "$XORG_CONFIG" ]; then XORG_CONFIG="$t/totono-fb.conf"; fi
+        done
+    fi
+
+    if [ -z "$XORG" ]; then
+        for x in "$(command -v Xorg 2>/dev/null || true)" /usr/bin/Xorg /usr/bin/X /usr/trimui/bin/Xorg /mnt/SDCARD/spruce/bin64/Xorg; do
+            [ -n "$x" ] && [ -x "$x" ] && { XORG="$x"; XORG_SOURCE=system; break; }
+        done
+    fi
+
+    if [ -z "$XORG" ]; then
+        log "ERROR no Xorg found"
+        log "checked_private=$PRIVATE_XORG"
+        log "checked_system=PATH,/usr/bin,/usr/trimui/bin,/mnt/SDCARD/spruce/bin64"
+        ls -ld /mnt/UDISK/xorg /mnt/UDISK/xorg/usr/lib/xorg /mnt/UDISK/xorg-libs 2>/dev/null || true
+        return 1
+    fi
+
     if [ -f /tmp/.X1-lock ]; then
         xp=$(tr -dc '0-9' </tmp/.X1-lock 2>/dev/null || true)
         if [ -z "$xp" ] || ! kill -0 "$xp" 2>/dev/null; then rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true; fi
     fi
-    write_xorg_config
-    "$XORG" :1 -ac -nolisten tcp -noreset -config "$XCONF" -logfile "$LOGDIR/Xorg.test14.log" >"$LOGDIR/Xorg.test14.stdout.log" 2>&1 &
+
+    if [ -z "$XORG_CONFIG" ]; then
+        write_xorg_config
+        XORG_CONFIG="$XCONF"
+    fi
+
+    log "xorg_source=$XORG_SOURCE"
+    log "xorg_binary=$XORG"
+    log "xorg_config=$XORG_CONFIG"
+    log "xorg_ld_path=${XORG_LD_PATH:-<default>}"
+
+    if [ -n "$XORG_LD_PATH" ]; then
+        env LD_LIBRARY_PATH="$XORG_LD_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            "$XORG" :1 -ac -nolisten tcp -noreset -config "$XORG_CONFIG" \
+            -logfile "$LOGDIR/Xorg.test14.log" >"$LOGDIR/Xorg.test14.stdout.log" 2>&1 &
+    else
+        "$XORG" :1 -ac -nolisten tcp -noreset -config "$XORG_CONFIG" \
+            -logfile "$LOGDIR/Xorg.test14.log" >"$LOGDIR/Xorg.test14.stdout.log" 2>&1 &
+    fi
     XORG_PID=$!; XORG_STARTED=1
+
     i=0
-    while [ "$i" -lt 8 ]; do
+    while [ "$i" -lt 10 ]; do
         sleep 1
-        if display_usable :1; then DISPLAY=:1; export DISPLAY; log "Xorg ready pid=$XORG_PID"; return 0; fi
+        if display_usable :1; then
+            DISPLAY=:1; export DISPLAY
+            export SDL_VIDEODRIVER=x11
+            log "Xorg ready: DISPLAY=$DISPLAY pid=$XORG_PID"
+            return 0
+        fi
         kill -0 "$XORG_PID" 2>/dev/null || break
         i=$((i+1))
     done
-    log "ERROR Xorg failed"; tail -120 "$LOGDIR/Xorg.test14.log" 2>/dev/null || true
+
+    log "ERROR Xorg failed"
+    tail -160 "$LOGDIR/Xorg.test14.log" 2>/dev/null || true
+    tail -160 "$LOGDIR/Xorg.test14.stdout.log" 2>/dev/null || true
     return 1
 }
 
@@ -163,7 +233,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.1"
+log "harness_version=2026-09-28.2"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
