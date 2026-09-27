@@ -41,6 +41,22 @@ DT_RELENT = 19
 DT_PLTREL = 20
 DT_JMPREL = 23
 
+AARCH64_RELOC_NAMES = {
+    257: "R_AARCH64_ABS64",
+    258: "R_AARCH64_ABS32",
+    260: "R_AARCH64_PREL64",
+    261: "R_AARCH64_PREL32",
+    1024: "R_AARCH64_COPY",
+    1025: "R_AARCH64_GLOB_DAT",
+    1026: "R_AARCH64_JUMP_SLOT",
+    1027: "R_AARCH64_RELATIVE",
+    1028: "R_AARCH64_TLS_DTPMOD64",
+    1029: "R_AARCH64_TLS_DTPREL64",
+    1030: "R_AARCH64_TLS_TPREL64",
+    1031: "R_AARCH64_TLSDESC",
+    1032: "R_AARCH64_IRELATIVE",
+}
+
 
 def lz4_block(data: bytes, expected_size: int) -> bytes:
     out = bytearray()
@@ -167,6 +183,71 @@ def _max_relocation_symbol(decoded_segments, tags: dict[int, int]) -> int:
     return maximum
 
 
+
+def _relocation_summary(decoded_segments, tags: dict[int, int]) -> dict:
+    type_counts: Counter[int] = Counter()
+    symbolic_type_counts: Counter[int] = Counter()
+    tables: list[dict] = []
+
+    def record(va: int, size: int, ent: int, kind: str, with_addend: bool) -> None:
+        if not va or not size:
+            return
+        default_ent = 24 if with_addend else 16
+        ent = ent or default_ent
+        if ent < 16 or size % ent:
+            raise ValueError(f"invalid {kind} table geometry")
+        tables.append({
+            "kind": kind,
+            "virtual_address": va,
+            "size": size,
+            "entry_size": ent,
+            "count": size // ent,
+        })
+        for off in range(0, size, ent):
+            row = _read_virtual(decoded_segments, va + off, ent)
+            r_info = struct.unpack_from("<Q", row, 8)[0]
+            reloc_type = r_info & 0xffffffff
+            symbol = r_info >> 32
+            type_counts[reloc_type] += 1
+            if symbol:
+                symbolic_type_counts[reloc_type] += 1
+
+    record(tags.get(DT_RELA, 0), tags.get(DT_RELASZ, 0),
+           tags.get(DT_RELAENT, 0), "RELA", True)
+    record(tags.get(DT_REL, 0), tags.get(DT_RELSZ, 0),
+           tags.get(DT_RELENT, 0), "REL", False)
+
+    if tags.get(DT_JMPREL) and tags.get(DT_PLTRELSZ):
+        if tags.get(DT_PLTREL) == DT_RELA:
+            record(tags[DT_JMPREL], tags[DT_PLTRELSZ],
+                   tags.get(DT_RELAENT, 0), "JMPREL/RELA", True)
+        elif tags.get(DT_PLTREL) == DT_REL:
+            record(tags[DT_JMPREL], tags[DT_PLTRELSZ],
+                   tags.get(DT_RELENT, 0), "JMPREL/REL", False)
+        else:
+            raise ValueError("unsupported DT_PLTREL value")
+
+    named_counts = {}
+    symbolic_named_counts = {}
+    unknown_counts = {}
+    for reloc_type, count in sorted(type_counts.items()):
+        name = AARCH64_RELOC_NAMES.get(reloc_type)
+        if name:
+            named_counts[name] = count
+            if symbolic_type_counts[reloc_type]:
+                symbolic_named_counts[name] = symbolic_type_counts[reloc_type]
+        else:
+            unknown_counts[str(reloc_type)] = count
+
+    return {
+        "total": sum(type_counts.values()),
+        "tables": tables,
+        "type_counts": named_counts,
+        "symbolic_type_counts": symbolic_named_counts,
+        "unknown_type_counts": unknown_counts,
+    }
+
+
 def parse_mod0_dynamic(decoded_segments: list[tuple[str, int, bytes, int]]) -> dict | None:
     candidates: list[tuple[int, str, int]] = []
     for name, base, blob, _extra in decoded_segments:
@@ -266,6 +347,7 @@ def parse_mod0_dynamic(decoded_segments: list[tuple[str, int, bytes, int]]) -> d
                 "nn_imports": nn_imports,
                 "direct_graphics_imports": direct_graphics,
                 "other_imports": other_imports,
+                "relocations": _relocation_summary(decoded_segments, tags),
             }
         except (ValueError, struct.error):
             # Printable "MOD0" can theoretically occur in arbitrary data. Try
