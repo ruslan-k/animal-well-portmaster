@@ -33,7 +33,7 @@ jobs:
             ca-certificates git curl xz-utils zstd zip make cmake python3 python3-pip \
             file binutils gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 \
-            libvulkan-dev
+            libvulkan-dev libunwind8 libstdc++6
           python3 -m pip install --no-cache-dir cmake==3.27.9
           cmake --version
           ldd --version | head -n1
@@ -45,17 +45,23 @@ jobs:
 
       - name: Validate every shipped ELF against SpruceOS ABI ceiling
         run: |
+          set -o pipefail
           RT=.work/package/animalwell/runtime
           mkdir -p dist
-          bash scripts/check-abi.sh "$RT" | tee dist/abi-report.txt
+          bash scripts/check-abi.sh "$RT" 2>&1 | tee dist/abi-report.txt
 
       - name: Validate formats and ARM64 loader
         run: |
+          set -euo pipefail
           RT=.work/package/animalwell/runtime
           file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/d3d12_smoke.exe"
           file "$RT/box64/box64" | grep -q 'ARM aarch64'
           file "$RT/tools/vkprobe" | grep -q 'ARM aarch64'
           file "$RT/tools/d3d12_smoke.exe" | grep -q 'PE32+'
+          for f in "$RT"/box64/x64lib/*.so*; do
+            file "$f"
+            file "$f" | grep -q 'x86-64'
+          done
           qemu-aarch64 -L /usr/aarch64-linux-gnu "$RT/box64/box64" -v 2>&1 | tee dist/box64-qemu.log
 
       - name: Verify game-free artifact
