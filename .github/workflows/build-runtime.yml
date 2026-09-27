@@ -214,3 +214,152 @@ jobs:
           name: animalwell-test13-direct-vkd3d
           path: dist/test13
           if-no-files-found: error
+
+
+  build-test14-mali-wsi-wrapper:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Configure amd64 + arm64 Focal repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          dpkg --add-architecture arm64
+          cat >/etc/apt/sources.list <<'EOF'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main universe
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal-updates main universe
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu focal-security main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe
+          EOF
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git cmake make pkg-config python3 file binutils \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+            wayland-protocols libwayland-bin \
+            libvulkan-dev:arm64 libx11-dev:arm64 libx11-xcb-dev:arm64 \
+            libxext-dev:arm64 libxrandr-dev:arm64 \
+            libxcb1-dev:arm64 libxcb-dri3-0-dev:arm64 libxcb-present-dev:arm64 \
+            libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
+            libdrm-dev:arm64 libwayland-dev:arm64
+
+      - uses: actions/checkout@v4
+
+      - name: Stage current Vulkan headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          mkdir -p /opt/khronos/include /opt/khronos/lib/pkgconfig
+          cp -a /tmp/Vulkan-Headers/include/. /opt/khronos/include/
+          cat >/opt/khronos/lib/pkgconfig/vulkan.pc <<'EOF'
+          prefix=/usr
+          exec_prefix=${prefix}
+          libdir=/usr/lib/aarch64-linux-gnu
+          includedir=/opt/khronos/include
+
+          Name: Vulkan-Loader
+          Description: Vulkan Loader
+          Version: 1.3.296
+          Libs: -L${libdir} -lvulkan
+          Cflags: -I${includedir}
+          EOF
+
+      - name: Cross-build Mali WSI wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/zeyadadev/mali-vulkan-icd-wrapper.git /tmp/mali-wrapper
+          cat >/tmp/aarch64-toolchain.cmake <<'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+          set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+          set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+          set(CMAKE_LIBRARY_ARCHITECTURE aarch64-linux-gnu)
+          EOF
+          export PKG_CONFIG_LIBDIR=/opt/khronos/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_PATH=
+          cmake -S /tmp/mali-wrapper -B /tmp/mali-wrapper-build \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/aarch64-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCURRENT_ARCH=aarch64 \
+            -DBUILD_64BIT=ON -DBUILD_32BIT=OFF \
+            -DBUILD_HUD=OFF -DBUILD_TESTING=OFF -DINSTALL_ICDS=OFF \
+            -DBUILD_WSI_X11=ON -DBUILD_WSI_WAYLAND=OFF -DBUILD_WSI_HEADLESS=ON \
+            -DENABLE_WAYLAND_FIFO_PRESENTATION_THREAD=OFF \
+            -DMALI_DRIVER_PATH_64=/usr/lib/libmali.so.0 \
+            -DVULKAN_REGISTRY_XML=/tmp/Vulkan-Headers/registry/vk.xml
+          cmake --build /tmp/mali-wrapper-build -j4
+
+      - name: Cross-build Xlib WSI probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PKG_CONFIG_LIBDIR=/opt/khronos/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          mkdir -p dist/test14/lib
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -DVK_USE_PLATFORM_XLIB_KHR \
+            -I/opt/khronos/include \
+            -o dist/test14/vk_wsi_xlib_probe scripts/vk_wsi_xlib_probe.c \
+            -L/usr/lib/aarch64-linux-gnu -lvulkan -lX11
+          wrapper=$(find /tmp/mali-wrapper-build -type f -name 'libmali_wrapper.so*' | head -1)
+          test -n "$wrapper"
+          cp -L "$wrapper" dist/test14/lib/libmali_wrapper.so
+          ln -s libmali_wrapper.so dist/test14/lib/libmali_wrapper.so.1
+          aarch64-linux-gnu-strip dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so
+
+      - name: Collect ARM64 runtime dependency closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/test14/deps
+          python3 - <<'PY'
+          import os, re, subprocess, shutil
+          roots=['/usr/lib/aarch64-linux-gnu','/lib/aarch64-linux-gnu','/usr/aarch64-linux-gnu/lib']
+          queue=['dist/test14/vk_wsi_xlib_probe','dist/test14/lib/libmali_wrapper.so']
+          seen=set()
+          skip={'libc.so.6','libm.so.6','libdl.so.2','libpthread.so.0','librt.so.1','ld-linux-aarch64.so.1','libmali.so.0'}
+          def needed(path):
+              out=subprocess.check_output(['aarch64-linux-gnu-readelf','-d',path],text=True,errors='replace')
+              return re.findall(r'\(NEEDED\).*?\[(.*?)\]',out)
+          while queue:
+              p=queue.pop()
+              for n in needed(p):
+                  if n in skip or n in seen: continue
+                  src=next((os.path.join(r,n) for r in roots if os.path.exists(os.path.join(r,n))),None)
+                  if not src:
+                      print('MISSING_DEP',n,'needed_by',p)
+                      continue
+                  dst=os.path.join('dist/test14/deps',n)
+                  shutil.copy2(os.path.realpath(src),dst)
+                  seen.add(n); queue.append(dst)
+          print('COPIED_DEPS',*sorted(seen),sep='\n')
+          PY
+          aarch64-linux-gnu-strip dist/test14/deps/*.so* 2>/dev/null || true
+          file dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so dist/test14/deps/*
+
+      - name: Write manifest and validate ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >dist/test14/mali_wrapper_icd.json <<'EOF'
+          {
+            "file_format_version": "1.0.0",
+            "ICD": {
+              "library_path": "lib/libmali_wrapper.so",
+              "api_version": "1.3.276"
+            }
+          }
+          EOF
+          printf 'mode=mali-wrapper-xlib-wsi\nwrapper=zeyadadev/mali-vulkan-icd-wrapper\nforce_presenter=SHM\nmali_driver=/usr/lib/libmali.so.0\n' >dist/test14/MANIFEST.txt
+          bash scripts/check-abi.sh dist/test14 2>&1 | tee dist/test14/abi-report.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test14-mali-wsi-wrapper
+          path: dist/test14
+          if-no-files-found: error
