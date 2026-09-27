@@ -281,18 +281,7 @@ jobs:
           p=Path('/tmp/mali-wrapper/src/wsi/x11/drm_display.cpp')
           s=p.read_text()
           pat=r'static bool fill_supported_formats_with_modifiers\(.*?\n\}\n\nstd::optional<drm_display>'
-          repl='''static bool fill_supported_formats_with_modifiers(uint32_t primary_plane_index, const util::fd_owner &drm_fd,
-                                                   const drm_plane_resources_owner &plane_res,
-                                                   util::vector<drm_format_pair> &supported_formats)
-{
-    (void)primary_plane_index;
-    (void)drm_fd;
-    (void)plane_res;
-    (void)supported_formats;
-    return false;
-}
-
-std::optional<drm_display>'''
+          repl="static bool fill_supported_formats_with_modifiers(uint32_t primary_plane_index, const util::fd_owner &drm_fd,\\n                                                   const drm_plane_resources_owner &plane_res,\\n                                                   util::vector<drm_format_pair> &supported_formats)\\n{\\n    (void)primary_plane_index;\\n    (void)drm_fd;\\n    (void)plane_res;\\n    (void)supported_formats;\\n    return false;\\n}\\n\\nstd::optional<drm_display>"
           ns,n=re.subn(pat,repl,s,count=1,flags=re.S)
           if n != 1:
               raise SystemExit('failed to patch old-libdrm modifier path')
