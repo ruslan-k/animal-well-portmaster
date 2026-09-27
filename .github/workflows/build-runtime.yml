@@ -308,44 +308,36 @@ jobs:
 
           p=Path('/tmp/mali-wrapper/src/wsi/x11/swapchain.cpp')
           s=p.read_text()
-          old='''   WSIALLOC_ASSERT_VERSION();
-   if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)
-   {
-      WSI_LOG_ERROR("Failed to create wsi allocator.");
-      return VK_ERROR_INITIALIZATION_FAILED;
-   }
-
-   const bool force_shm = env_var_is_enabled(std::getenv("WSI_X11_FORCE_SHM"));
-   const bool force_bridge = env_var_is_enabled(std::getenv("WSI_X11_FORCE_BRIDGE"));
-'''
-          new='''   const bool force_shm = env_var_is_enabled(std::getenv("WSI_X11_FORCE_SHM"));
-
-   /*
-    * Forced SHM presentation does not use wsialloc/DMA-BUF memory.  Some
-    * embedded Mali systems (including TSPS/Spruce) do not expose the
-    * upstream default /dev/dma_heap/system-uncached node.  Requiring
-    * wsialloc_new() here therefore rejects a perfectly usable SHM path
-    * before the SHM presenter is even initialized.
-    */
-   if (!force_shm)
-   {
-      WSIALLOC_ASSERT_VERSION();
-      if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)
-      {
-         WSI_LOG_ERROR("Failed to create wsi allocator.");
-         return VK_ERROR_INITIALIZATION_FAILED;
-      }
-   }
-   else
-   {
-      WSI_LOG_INFO("WSI_X11_FORCE_SHM: skipping unused wsialloc/DMA-BUF allocator initialization.");
-   }
-
-   const bool force_bridge = env_var_is_enabled(std::getenv("WSI_X11_FORCE_BRIDGE"));
-'''
-          if old not in s:
-              raise SystemExit('failed to find X11 wsialloc init block')
-          p.write_text(s.replace(old,new,1))
+          pat2=(r'   WSIALLOC_ASSERT_VERSION\\(\\);\\n'
+                r'   if \\(wsialloc_new\\(&m_wsi_allocator\\) != WSIALLOC_ERROR_NONE\\)\\n'
+                r'   \\{\\n'
+                r'      WSI_LOG_ERROR\\("Failed to create wsi allocator\\."\\);\\n'
+                r'      return VK_ERROR_INITIALIZATION_FAILED;\\n'
+                r'   \\}\\n\\n'
+                r'   const bool force_shm = env_var_is_enabled\\(std::getenv\\("WSI_X11_FORCE_SHM"\\)\\);\\n'
+                r'   const bool force_bridge = env_var_is_enabled\\(std::getenv\\("WSI_X11_FORCE_BRIDGE"\\)\\);')
+          repl2=("   const bool force_shm = env_var_is_enabled(std::getenv(\\\"WSI_X11_FORCE_SHM\\\"));\\n"
+                 "\\n"
+                 "   /* Forced SHM does not use wsialloc/DMA-BUF memory. */\\n"
+                 "   if (!force_shm)\\n"
+                 "   {\\n"
+                 "      WSIALLOC_ASSERT_VERSION();\\n"
+                 "      if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)\\n"
+                 "      {\\n"
+                 "         WSI_LOG_ERROR(\\\"Failed to create wsi allocator.\\\");\\n"
+                 "         return VK_ERROR_INITIALIZATION_FAILED;\\n"
+                 "      }\\n"
+                 "   }\\n"
+                 "   else\\n"
+                 "   {\\n"
+                 "      WSI_LOG_INFO(\\\"WSI_X11_FORCE_SHM: skipping unused wsialloc/DMA-BUF allocator initialization.\\\");\\n"
+                 "   }\\n"
+                 "\\n"
+                 "   const bool force_bridge = env_var_is_enabled(std::getenv(\\\"WSI_X11_FORCE_BRIDGE\\\"));")
+          ns,n=re.subn(pat2,repl2,s,count=1)
+          if n != 1:
+              raise SystemExit('failed to patch X11 wsialloc init block')
+          p.write_text(ns)
           PY
           cat >/tmp/aarch64-toolchain.cmake <<'EOF'
           set(CMAKE_SYSTEM_NAME Linux)
