@@ -361,6 +361,38 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.sha256
 
+      - name: Build delta-only test15 same-wineserver seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-same-wineserver-seed/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-SAME-WINESERVER-SEED-DELTA.txt" <<'EOF'
+          Delta over the previous QUIET-NULLDRV-SEED diagnostic patch.
+
+          Changed file only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.13
+            * successful GPU-less display seed keeps the same wineserver alive
+            * restores real Vulkan/OpenGL env for a fresh Wine client without
+              restarting wineserver
+            * verifies \\.\DISPLAY1 + D3DKMT in that same Wine session
+            * if successful, immediately tests DXGI factory and D3D12 device
+              while preserving the seeded wineserver
+            * wineserver is killed only after the full same-session matrix
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-same-wineserver-seed && zip -qr ../Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip > Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -394,6 +426,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256
             dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.zip
             dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
           if-no-files-found: error
 
 
