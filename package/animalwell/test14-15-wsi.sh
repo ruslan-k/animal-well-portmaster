@@ -234,7 +234,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.3"
+log "harness_version=2026-09-28.4"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -285,7 +285,7 @@ export BOX64_NOBANNER=1 BOX64_DYNAREC=1 BOX64_DYNACACHE=1 BOX64_LOG=1
 export BOX64_LD_LIBRARY_PATH="$RT/box64/x64lib:$RT/wine/lib:$RT/wine/lib64${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 export XDG_CACHE_HOME="$ROOT/cache" VKD3D_SHADER_CACHE_PATH="$ROOT/cache/vkd3d"
 export WINEDLLOVERRIDES='d3d12=b;d3d12core=b;winemenubuilder.exe=d;mscoree=d;mshtml=d'
-export WINE_D3D_CONFIG=renderer=vulkan
+export WINE_D3D_CONFIG=renderer=no3d
 export VKD3D_CONFIG=virtual_heaps
 export VKD3D_DEBUG=info
 export VKD3D_LOG_FILE="$LOGDIR/test15-vkd3d-$STAMP.log"
@@ -297,14 +297,16 @@ run_timeout 20 "$BOX64" "$WINE" cmd /c ver || { log "TEST15_RESULT=FAIL_PREFIX";
 sleep 1
 mem
 
-log "--- Wine DXGI/D3D12/swapchain through wrapper ---"
+log "--- Wine DXGI(no3d) + D3D12/VKD3D through wrapper ---"
+log "WINE_D3D_CONFIG=$WINE_D3D_CONFIG"
+log "NOTE renderer=no3d applies to WineD3D/DXGI adapter init; d3d12.dll still uses VKD3D/Vulkan"
 set +e
-run_timeout 40 "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe"
+run_timeout 35 "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe"
 rc=$?
 set -e 2>/dev/null || true
 mem
 if [ "$rc" -eq 0 ]; then
-    log "TEST15_RESULT=PASS_WINE_DXGI_D3D12_SWAPCHAIN"
+    log "TEST15_RESULT=PASS_WINE_DXGI_NO3D_D3D12"
 else
     log "TEST15_RESULT=FAIL rc=$rc"
 fi
