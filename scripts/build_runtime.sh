@@ -59,6 +59,43 @@ WD=$(find "$WORK" -maxdepth 1 -type d -name "wine-${WINE_VER}*wow64*" | head -1)
 [ -n "$WD" ] || { echo 'Wine extract dir missing' >&2; exit 3; }
 cp -a "$WD"/. "$RT/wine/"
 
+# TSPS/Box64 diagnostic patch: disable only Wine win32u's internal D3DKMT
+# Vulkan instance. D3DKMT already treats a missing internal Vulkan instance as
+# non-fatal and still allocates/returns an adapter handle. This leaves the
+# process-wide Vulkan loader fully available to VKD3D/D3D12 itself.
+WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"
+WIN32U_ORIG_SHA=ae1d4166fda55ab9a9e0ac0ce2cbb93f425b2f3fdcbbb92e293c68629ed30ba4
+WIN32U_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
+echo "$WIN32U_ORIG_SHA  $WIN32U" | sha256sum -c -
+WIN32U_SYM=$(nm -an "$WIN32U" | awk '$3 == "d3dkmt_init_vulkan" {print $1; exit}')
+[ "$WIN32U_SYM" = "0000000000044940" ] || {
+  echo "unexpected d3dkmt_init_vulkan symbol address: $WIN32U_SYM" >&2
+  exit 6
+}
+python3 - "$WIN32U" "$WIN32U_SYM" <<'PY'
+import sys
+path, sym = sys.argv[1], int(sys.argv[2], 16)
+with open(path, "r+b") as f:
+    f.seek(sym)
+    old = f.read(4)
+    if old != bytes.fromhex("4883ec08"):
+        raise SystemExit(f"unexpected d3dkmt_init_vulkan prologue: {old.hex()}")
+    f.seek(sym)
+    f.write(b"\xc3")
+PY
+echo "$WIN32U_PATCH_SHA  $WIN32U" | sha256sum -c -
+mkdir -p "$RT/wine-patches"
+cat >"$RT/wine-patches/D3DKMT-NOVULKAN.txt" <<EOF
+wine=$WINE_VER
+file=lib/wine/x86_64-unix/win32u.so
+symbol=d3dkmt_init_vulkan
+symbol_address=0x44940
+original_sha256=$WIN32U_ORIG_SHA
+patched_sha256=$WIN32U_PATCH_SHA
+patch=first byte 0x48 -> 0xc3 (ret)
+reason=avoid Box64 crash in Wine D3DKMT-internal Vulkan instance; VKD3D Vulkan remains enabled
+EOF
+
 # Generate a matching Wine 11.18 registry template on a real Unix filesystem.
 # The target SD card may be FAT/exFAT, so the launcher recreates only a tiny
 # writable prefix in /tmp and symlinks system32/syswow64 back to the bundled
