@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.17"
+log "harness_version=2026-09-28.18"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -399,6 +399,63 @@ if [ -x "$VKEXT" ]; then
 else
     log "ERROR missing x64 Vulkan bridge probe: $VKEXT"
     exit 35
+fi
+
+# The .17 field run proved extension enumeration is healthy with wrapper logging off,
+# but Wine now faults at the host vkCreateInstance Unix call. Reproduce that boundary
+# directly through Box64, outside Wine, using both a minimal create-info and the same
+# five host extensions selected by WineVulkan.
+LAST_VKCREATE_PASS=0
+run_vkcreate_stage() {
+    label=$1
+    mode=$2
+    stage_log="$LOGDIR/test15-vkcreate-$label-$STAMP.stage.log"
+    LAST_VKCREATE_PASS=0
+    log "--- vkcreate_label=$label mode=$mode wrapper_log_category=off watchdog=12s ---"
+    rm -f "$stage_log" 2>/dev/null || true
+    set +e
+    run_timeout 12 env \
+        BOX64_LOG=2 \
+        MALI_WRAPPER_LOG_CATEGORY=off \
+        "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
+    rc=$?
+    set -e 2>/dev/null || true
+    cat "$stage_log" 2>/dev/null || true
+    if grep -Fq 'VKCREATE_RESULT=PASS' "$stage_log" 2>/dev/null; then
+        LAST_VKCREATE_PASS=1
+        semantic=PASS
+    else
+        semantic=FAIL
+    fi
+    log "VKCREATE_STAGE_RESULT label=$label mode=$mode rc=$rc semantic=$semantic"
+    return 0
+}
+
+vkcreate_min_direct=0
+vkcreate_min_gipa=0
+vkcreate_wine5_direct=0
+vkcreate_wine5_gipa=0
+run_vkcreate_stage min-direct create-min-direct
+vkcreate_min_direct=$LAST_VKCREATE_PASS
+run_vkcreate_stage min-gipa create-min-gipa
+vkcreate_min_gipa=$LAST_VKCREATE_PASS
+run_vkcreate_stage wine5-direct create-wine5-direct
+vkcreate_wine5_direct=$LAST_VKCREATE_PASS
+run_vkcreate_stage wine5-gipa create-wine5-gipa
+vkcreate_wine5_gipa=$LAST_VKCREATE_PASS
+log "VKCREATE_MATRIX min_direct=$vkcreate_min_direct min_gipa=$vkcreate_min_gipa wine5_direct=$vkcreate_wine5_direct wine5_gipa=$vkcreate_wine5_gipa"
+
+if [ "$vkcreate_wine5_direct" -eq 1 ] || [ "$vkcreate_wine5_gipa" -eq 1 ]; then
+    log "BOX64_VULKAN_CREATE_RESULT=PASS_WINE5"
+    log "NOTE direct Box64 host vkCreateInstance works; any later Wine fault is above the raw Box64/Mali create boundary"
+elif [ "$vkcreate_min_direct" -eq 1 ] || [ "$vkcreate_min_gipa" -eq 1 ]; then
+    log "BOX64_VULKAN_CREATE_RESULT=PASS_MINIMAL_FAIL_WINE5"
+    log "TEST15_RESULT=VKCREATE_WINE5_EXTENSION_BLOCKER"
+    exit 0
+else
+    log "BOX64_VULKAN_CREATE_RESULT=FAIL_MINIMAL"
+    log "TEST15_RESULT=BOX64_VULKAN_CREATE_BLOCKER"
+    exit 0
 fi
 log "--- prefix sanity ---"
 prefix_ok=0
