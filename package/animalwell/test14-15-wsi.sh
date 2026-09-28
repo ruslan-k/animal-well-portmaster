@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.14"
+log "harness_version=2026-09-28.15"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -301,7 +301,7 @@ export VKD3D_DEBUG=info
 export VKD3D_LOG_FILE="$LOGDIR/test15-vkd3d-$STAMP.log"
 export WINEDEBUG=+timestamp,+dxgi,+d3d,+wined3d,+vulkan,+x11drv,+xrandr,+system,+d3dkmt,+wgl
 
-WIN32U="$RUNTIME/wine/lib/wine/x86_64-unix/win32u.so"
+WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"
 WIN32U_D3DKMT_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
 if [ -f "$WIN32U" ]; then
     win32u_sha=$(sha256sum "$WIN32U" | awk '{print $1}')
