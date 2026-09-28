@@ -1345,7 +1345,16 @@ jobs:
           mkdir -p dist/test15-box64-main
           cp /tmp/box64-main-build/box64 dist/test15-box64-main/box64-test15-main
           aarch64-linux-gnu-strip dist/test15-box64-main/box64-test15-main
-          file dist/test15-box64-main/box64-test15-main
+          git clone -q https://github.com/ptitSeb/box64.git /tmp/box64-gipa
+          git -C /tmp/box64-gipa checkout -q "$BOX64_TEST15_REF"
+          python3 scripts/patch_box64_vk_gipa.py /tmp/box64-gipa/src/wrapped/wrappedvulkan.c
+          /usr/local/bin/cmake -S /tmp/box64-gipa -B /tmp/box64-gipa-build -DCMAKE_TOOLCHAIN_FILE=/tmp/box64-toolchain.cmake -DARM64=1 -DBOX32=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          /usr/local/bin/cmake --build /tmp/box64-gipa-build -j4
+          cp /tmp/box64-gipa-build/box64 dist/test15-box64-main/box64-test15-gipa
+          aarch64-linux-gnu-strip dist/test15-box64-main/box64-test15-gipa
+          strings dist/test15-box64-main/box64-test15-gipa | grep -F 'BOX64_VULKAN_GIPA_BLOCK'
+          bash scripts/check-abi.sh dist/test15-box64-main/box64-test15-gipa
+          file dist/test15-box64-main/box64-test15-main dist/test15-box64-main/box64-test15-gipa
           strings dist/test15-box64-main/box64-test15-main | grep -F 'BOX64_MMAP32' | head -1 || true
 
       - name: Validate Box64 candidate ABI
@@ -1362,25 +1371,26 @@ jobs:
           D=dist/test15-box64-main-delta/animalwell
           mkdir -p "$D/runtime/box64"
           cp dist/test15-box64-main/box64-test15-main "$D/runtime/box64/box64-test15-main"
+          cp dist/test15-box64-main/box64-test15-gipa "$D/runtime/box64/box64-test15-gipa"
           cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
-          chmod +x "$D/test14-15-wsi.sh" "$D/runtime/box64/box64-test15-main"
+          chmod +x "$D/test14-15-wsi.sh" "$D/runtime/box64/box64-test15-main" "$D/runtime/box64/box64-test15-gipa"
           cat >"$D/TEST15-BOX64-MAIN-DELTA.txt" <<'EOF'
           Delta over the previous test15 staged diagnostics.
 
-          Adds a separate Box64 candidate built from:
+          Adds two separate Box64 candidates built from:
             c61543e47b8a9d1720742186bfea205ad8a7ed35
           (post-v0.4.4 main, 2026-09-27)
 
-          Production runtime/box64/box64 is NOT replaced.
+          - box64-test15-main: upstream candidate, not selected for production
+          - box64-test15-gipa: same source plus an opt-in guard for one Mali
+            driver GIPA lookup that was observed to indirect-call NULL inside
+            the native Vulkan loader. It is enabled only for the isolated
+            post-create diagnostic with BOX64_VULKAN_SKIP_UNSAFE_GIPA=1.
 
-          Relevant upstream changes after v0.4.4 include:
-          - #4303: do not allocate bridge bricks in guest low memory for 64-bit guests
-          - #4377: limit MAP_NORESERVE length on 39-bit platforms
-          - #4394: fix race between concurrent mmaps overwriting guest mappings
-
-          The harness first probes load-dxgi with release v0.4.4, then with the
-          candidate, using an explicit watchdog. If the candidate gets past
-          load-dxgi, it continues load-d3d12/factory/device/all with the candidate.
+          Production runtime/box64/box64 is NOT replaced. The post-create test
+          uses the test-only candidate; all earlier probes keep the installed
+          baseline. A PASS only clears the GIPA bootstrap boundary; it is not
+          evidence of a visible frame or stable game launch.
 
           Run:
             ./test14-15-wsi.sh test15

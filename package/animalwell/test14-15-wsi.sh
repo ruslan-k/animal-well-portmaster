@@ -23,6 +23,7 @@ ICD="/tmp/animalwell-mali-wrapper-$$.json"
 PFX="/tmp/animalwell-test15-prefix"
 BOX64="$RT/box64/box64"
 BOX64_MAIN="$RT/box64/box64-test15-main"
+BOX64_GIPA="$RT/box64/box64-test15-gipa"
 WINE="$RT/wine/bin/wine"
 WINESERVER="$RT/wine/bin/wineserver"
 
@@ -473,13 +474,14 @@ LAST_POSTCREATE_PASS=0
 run_vkpostcreate_stage() {
     stage_log="$LOGDIR/test15-vkpostcreate-$STAMP.stage.log"
     LAST_POSTCREATE_PASS=0
-    log "--- vkpostcreate_label=wine5-instance-procs mode=postcreate-wine5 wrapper_log_category=off watchdog=20s ---"
+    [ -x "$BOX64_GIPA" ] || { log "ERROR missing test-only Box64 GIPA candidate: $BOX64_GIPA"; LAST_POSTCREATE_PASS=0; return 0; }
+    log "--- vkpostcreate_label=wine5-instance-procs mode=postcreate-wine5 box64_candidate=env-gipa-guard wrapper_log_category=off watchdog=20s ---"
     rm -f "$stage_log" 2>/dev/null || true
     set +e
     run_timeout 20 env \
         BOX64_LOG=2 \
         MALI_WRAPPER_LOG_CATEGORY=off \
-        "$BOX64" "$VKEXT" postcreate-wine5 >"$stage_log" 2>&1
+        BOX64_VULKAN_SKIP_UNSAFE_GIPA=1 "$BOX64_GIPA" "$VKEXT" postcreate-wine5 >"$stage_log" 2>&1
     rc=$?
     set -e 2>/dev/null || true
     cat "$stage_log" 2>/dev/null || true
