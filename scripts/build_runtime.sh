@@ -67,7 +67,7 @@ WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"
 WIN32U_ORIG_SHA=ae1d4166fda55ab9a9e0ac0ce2cbb93f425b2f3fdcbbb92e293c68629ed30ba4
 WIN32U_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
 echo "$WIN32U_ORIG_SHA  $WIN32U" | sha256sum -c -
-WIN32U_SYM=$(nm -an "$WIN32U" | awk '$3 == "d3dkmt_init_vulkan" {print $1; exit}')
+WIN32U_SYM=$(nm -an "$WIN32U" | awk '$3 == "d3dkmt_init_vulkan" && !found {print $1; found=1}')
 [ "$WIN32U_SYM" = "0000000000044940" ] || {
   echo "unexpected d3dkmt_init_vulkan symbol address: $WIN32U_SYM" >&2
   exit 6
