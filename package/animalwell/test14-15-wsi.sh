@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.16"
+log "harness_version=2026-09-28.17"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -318,8 +318,10 @@ else
 fi
 
 # Isolate the x86-64 -> Box64 -> native Vulkan bridge before spending time
-# on Wine display seeding. Native ARM64 test14 already proves the same host
-# loader/ICD can complete instance-extension count + fill directly.
+# on Wine display seeding. The .16 field run proved that the wrapper crashes
+# inside libstdc++ std::ostream::sentry while its C++ logger is active.
+# Disable wrapper logging before entering the host Vulkan path so Logger::Log()
+# returns before any stringstream/std::cout operation.
 VKEXT="$RT/tools/vulkan_ext_probe_x64"
 LAST_VKEXT_PASS=0
 run_vkext_stage() {
@@ -327,12 +329,17 @@ run_vkext_stage() {
     mode=$2
     limit=$3
     no_overlay=${4:-0}
+    log_category=${5:-off}
     stage_log="$LOGDIR/test15-vkext-$label-$STAMP.stage.log"
     LAST_VKEXT_PASS=0
-    log "--- vkext_label=$label mode=$mode no_overlay=$no_overlay watchdog=${limit}s ---"
+    log "--- vkext_label=$label mode=$mode no_overlay=$no_overlay wrapper_log_category=$log_category watchdog=${limit}s ---"
     rm -f "$stage_log" 2>/dev/null || true
     set +e
-    run_timeout "$limit" env BOX64_LOG=2 BOX64_NOVULKANOVERLAY="$no_overlay" "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
+    run_timeout "$limit" env \
+        BOX64_LOG=1 \
+        BOX64_NOVULKANOVERLAY="$no_overlay" \
+        MALI_WRAPPER_LOG_CATEGORY="$log_category" \
+        "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
     rc=$?
     set -e 2>/dev/null || true
     cat "$stage_log" 2>/dev/null || true
@@ -342,44 +349,49 @@ run_vkext_stage() {
     else
         semantic=FAIL
     fi
-    log "VKEXT_STAGE_RESULT label=$label mode=$mode no_overlay=$no_overlay rc=$rc semantic=$semantic"
+    log "VKEXT_STAGE_RESULT label=$label mode=$mode no_overlay=$no_overlay wrapper_log_category=$log_category rc=$rc semantic=$semantic"
     return 0
 }
 
 run_vkext_matrix() {
     matrix_name=$1
     no_overlay=$2
+    log_category=$3
     vkext_direct_count_pass=0
     vkext_direct_fill_pass=0
     vkext_gipa_count_pass=0
     vkext_gipa_fill_pass=0
 
-    run_vkext_stage "$matrix_name-direct-count" direct-count 10 "$no_overlay"
+    run_vkext_stage "$matrix_name-direct-count" direct-count 10 "$no_overlay" "$log_category"
     vkext_direct_count_pass=$LAST_VKEXT_PASS
-    run_vkext_stage "$matrix_name-direct-fill" direct-fill 10 "$no_overlay"
+    run_vkext_stage "$matrix_name-direct-fill" direct-fill 10 "$no_overlay" "$log_category"
     vkext_direct_fill_pass=$LAST_VKEXT_PASS
-    run_vkext_stage "$matrix_name-gipa-count" gipa-count 10 "$no_overlay"
+    run_vkext_stage "$matrix_name-gipa-count" gipa-count 10 "$no_overlay" "$log_category"
     vkext_gipa_count_pass=$LAST_VKEXT_PASS
-    run_vkext_stage "$matrix_name-gipa-fill" gipa-fill 10 "$no_overlay"
+    run_vkext_stage "$matrix_name-gipa-fill" gipa-fill 10 "$no_overlay" "$log_category"
     vkext_gipa_fill_pass=$LAST_VKEXT_PASS
-    log "VKEXT_MATRIX name=$matrix_name no_overlay=$no_overlay direct_count=$vkext_direct_count_pass direct_fill=$vkext_direct_fill_pass gipa_count=$vkext_gipa_count_pass gipa_fill=$vkext_gipa_fill_pass"
+    log "VKEXT_MATRIX name=$matrix_name no_overlay=$no_overlay wrapper_log_category=$log_category direct_count=$vkext_direct_count_pass direct_fill=$vkext_direct_fill_pass gipa_count=$vkext_gipa_count_pass gipa_fill=$vkext_gipa_fill_pass"
 
     [ "$vkext_direct_count_pass" -eq 1 ] && [ "$vkext_direct_fill_pass" -eq 1 ] && \
     [ "$vkext_gipa_count_pass" -eq 1 ] && [ "$vkext_gipa_fill_pass" -eq 1 ]
 }
 
 if [ -x "$VKEXT" ]; then
-    log "--- Box64/native Vulkan extension bridge matrix ---"
-    if run_vkext_matrix default 0; then
-        log "BOX64_VULKAN_BRIDGE_RESULT=PASS_DEFAULT"
+    log "--- Box64/native Vulkan extension bridge matrix (wrapper logging disabled) ---"
+    if run_vkext_matrix logoff 0 off; then
+        export MALI_WRAPPER_LOG_CATEGORY=off
+        log "BOX64_VULKAN_BRIDGE_RESULT=PASS_WRAPPER_LOGOFF"
+        log "MALI_WRAPPER_WORKAROUND=MALI_WRAPPER_LOG_CATEGORY=off"
     else
-        log "BOX64_VULKAN_BRIDGE_DEFAULT=FAIL; retrying with BOX64_NOVULKANOVERLAY=1"
-        if run_vkext_matrix no-overlay 1; then
+        log "BOX64_VULKAN_BRIDGE_LOGOFF=FAIL; retrying with BOX64_NOVULKANOVERLAY=1"
+        if run_vkext_matrix logoff-no-overlay 1 off; then
+            export MALI_WRAPPER_LOG_CATEGORY=off
             export BOX64_NOVULKANOVERLAY=1
-            log "BOX64_VULKAN_BRIDGE_RESULT=PASS_NOVULKANOVERLAY"
+            log "BOX64_VULKAN_BRIDGE_RESULT=PASS_WRAPPER_LOGOFF_NOVULKANOVERLAY"
+            log "MALI_WRAPPER_WORKAROUND=MALI_WRAPPER_LOG_CATEGORY=off"
             log "BOX64_VULKAN_WORKAROUND=BOX64_NOVULKANOVERLAY=1"
         else
-            log "BOX64_VULKAN_BRIDGE_RESULT=FAIL"
+            log "BOX64_VULKAN_BRIDGE_RESULT=FAIL_WITH_WRAPPER_LOGOFF"
             log "TEST15_RESULT=BOX64_VULKAN_BRIDGE_BLOCKER"
             exit 0
         fi
