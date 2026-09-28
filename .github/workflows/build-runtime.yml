@@ -260,6 +260,40 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
 
+      - name: Build delta-only test15 display seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-display-seed-delta/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-DISPLAY-SEED-DELTA.txt" <<'EOF'
+          Delta over the previous VDESKTOP diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.10
+            * adds Wine +system,+d3dkmt,+xrandr tracing
+            * reproduces the real-Vulkan display enumeration baseline
+            * temporarily points VK_ICD_FILENAMES at a guaranteed-missing ICD
+              so Wine display-cache population can proceed without Vulkan GPU discovery
+            * tries both native EnumDisplayDevicesW and DF_WINE_VIRTUAL_DESKTOP
+              while Vulkan discovery is disabled
+            * restores the real Mali wrapper and checks whether \\.\DISPLAY1
+              persists in the same prefix after wineserver restart
+            * only retries DXGI/D3D12 if real-Vulkan display enumeration returns
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-display-seed-delta && zip -qr ../Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip > Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -287,6 +321,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
             dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip
             dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256
           if-no-files-found: error
 
 
