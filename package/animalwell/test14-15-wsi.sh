@@ -220,7 +220,7 @@ EOF
     export VK_ICD_FILENAMES="$ICD"
     export WSI_X11_FORCE_SHM=1
     export MALI_WRAPPER_LOG_LEVEL=3
-    export MALI_WRAPPER_LOG_CATEGORY=all
+    export MALI_WRAPPER_LOG_CATEGORY=wrapper+wsi+low-address-map
     export MALI_WRAPPER_LOG_COLORS=0
     export LD_LIBRARY_PATH="$T14/deps:$T14/lib:$MALIDIR${XORG_LD_PATH:+:$XORG_LD_PATH}:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     log "real_mali=$mali"
@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.7"
+log "harness_version=2026-09-28.8"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -299,9 +299,9 @@ export WINE_D3D_CONFIG=renderer=no3d
 export VKD3D_CONFIG=virtual_heaps
 export VKD3D_DEBUG=info
 export VKD3D_LOG_FILE="$LOGDIR/test15-vkd3d-$STAMP.log"
-export WINEDEBUG=+timestamp,+dxgi,+wined3d,+vulkan
+export WINEDEBUG=+timestamp,+dxgi,+d3d,+wined3d,+vulkan,+x11drv
 
-log "--- prefix sanity (keep wineserver alive) ---"
+log "--- prefix sanity ---"
 prefix_ok=0
 attempt=1
 while [ "$attempt" -le 2 ]; do
@@ -315,36 +315,44 @@ while [ "$attempt" -le 2 ]; do
         prefix_ok=1
         break
     fi
-    # A killed conhost/cmd can occur after Wine has already initialized the prefix.
-    # Verify the server/prefix with a lightweight second command before declaring failure.
     attempt=$((attempt+1))
     sleep 1
 done
 if [ "$prefix_ok" -ne 1 ]; then
     log "WARN prefix sanity did not exit cleanly; continuing diagnostics because template prefix is present"
 fi
+"$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+sleep 1
 mem
 
-log "--- Wine staged DXGI/D3D12 diagnostics through wrapper ---"
-log "WINE_D3D_CONFIG=$WINE_D3D_CONFIG"
+log "--- Wine display/KMT + renderer matrix diagnostics ---"
 log "MALI_WRAPPER_LOG_LEVEL=$MALI_WRAPPER_LOG_LEVEL"
+log "MALI_WRAPPER_LOG_CATEGORY=$MALI_WRAPPER_LOG_CATEGORY"
 log "xorg_runtime_ld_path=${XORG_LD_PATH:-<none>}"
-log "NOTE wineserver is intentionally kept alive across stages"
-log "NOTE renderer=no3d applies to WineD3D/DXGI adapter init; d3d12.dll still uses VKD3D/Vulkan"
+log "NOTE every probe gets a fresh wineserver to avoid stale state after watchdog termination"
+log "NOTE factory probes compare WineD3D renderer=no3d, gl and vulkan"
 
+LAST_STAGE_PASS=0
 run_smoke_stage() {
-    stage=$1
-    limit=$2
-    log "--- smoke_stage=$stage watchdog=${limit}s persistent_wineserver=1 ---"
+    label=$1
+    stage=$2
+    limit=$3
+    renderer=$4
+    expected=$5
+    stage_log="$LOGDIR/test15-${label}-$STAMP.stage.log"
+    LAST_STAGE_PASS=0
+
+    log "--- smoke_label=$label stage=$stage renderer=$renderer watchdog=${limit}s ---"
+    rm -f "$stage_log" 2>/dev/null || true
+
     set +e
-    "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage" &
+    env WINE_D3D_CONFIG="renderer=$renderer" \
+        "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage" >"$stage_log" 2>&1 &
     smoke_pid=$!
     (
         sleep "$limit"
         if kill -0 "$smoke_pid" 2>/dev/null; then
-            log "SMOKE_WATCHDOG_FIRED stage=$stage pid=$smoke_pid"
-            # Kill only the smoke process. Keep wineserver alive so the next stage
-            # does not repeat wineboot/explorer initialization.
+            log "SMOKE_WATCHDOG_FIRED label=$label stage=$stage renderer=$renderer pid=$smoke_pid"
             kill -TERM "$smoke_pid" >/dev/null 2>&1 || true
             sleep 1
             kill -KILL "$smoke_pid" >/dev/null 2>&1 || true
@@ -358,16 +366,56 @@ run_smoke_stage() {
     wait "$watchdog_pid" >/dev/null 2>&1 || true
     set -e 2>/dev/null || true
 
-    log "SMOKE_STAGE_RESULT stage=$stage rc=$rc"
+    cat "$stage_log" 2>/dev/null || true
+    if grep -Fq "$expected" "$stage_log" 2>/dev/null; then
+        LAST_STAGE_PASS=1
+        semantic=PASS
+    else
+        semantic=FAIL
+    fi
+    log "SMOKE_STAGE_RESULT label=$label stage=$stage renderer=$renderer rc=$rc semantic=$semantic expected=$expected"
+
+    "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+    sleep 1
     mem
     return 0
 }
 
-run_smoke_stage load-dxgi 20
-run_smoke_stage load-d3d12 20
-run_smoke_stage factory 20
-run_smoke_stage device 25
-run_smoke_stage all 30
+# Reproduce the exact display/KMT primitives used by Wine's no3d adapter path.
+run_smoke_stage display-kmt display-kmt 20 no3d SMOKE_RESULT=PASS_DISPLAY_KMT
+
+# DLL loading is already proven, but keep one cheap baseline in this harness.
+run_smoke_stage load-dxgi load-dxgi 15 no3d SMOKE_RESULT=PASS_LOAD_DXGI
+run_smoke_stage load-d3d12 load-d3d12 15 no3d SMOKE_RESULT=PASS_LOAD_D3D12
+
+# Compare the exact failing CreateDXGIFactory1 call across WineD3D backends.
+run_smoke_stage factory-no3d factory 20 no3d SMOKE_RESULT=PASS_DXGI_FACTORY
+factory_no3d_pass=$LAST_STAGE_PASS
+run_smoke_stage factory-gl factory 25 gl SMOKE_RESULT=PASS_DXGI_FACTORY
+factory_gl_pass=$LAST_STAGE_PASS
+run_smoke_stage factory-vulkan factory 30 vulkan SMOKE_RESULT=PASS_DXGI_FACTORY
+factory_vulkan_pass=$LAST_STAGE_PASS
+
+# Only try D3D12CreateDevice on renderers whose DXGI factory actually returned.
+if [ "$factory_no3d_pass" -eq 1 ]; then
+    run_smoke_stage device-no3d device 30 no3d SMOKE_RESULT=PASS_D3D12_DEVICE
+else
+    log "SKIP device-no3d because factory-no3d did not pass"
+fi
+if [ "$factory_gl_pass" -eq 1 ]; then
+    run_smoke_stage device-gl device 35 gl SMOKE_RESULT=PASS_D3D12_DEVICE
+else
+    log "SKIP device-gl because factory-gl did not pass"
+fi
+if [ "$factory_vulkan_pass" -eq 1 ]; then
+    run_smoke_stage device-vulkan device 40 vulkan SMOKE_RESULT=PASS_D3D12_DEVICE
+    device_vulkan_pass=$LAST_STAGE_PASS
+    if [ "$device_vulkan_pass" -eq 1 ]; then
+        run_smoke_stage all-vulkan all 45 vulkan "D3D12 bootstrap smoke: PASS"
+    fi
+else
+    log "SKIP device-vulkan because factory-vulkan did not pass"
+fi
 
 log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
 exit 0
