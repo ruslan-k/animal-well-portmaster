@@ -16,6 +16,12 @@ jobs:
           sh -n 'package/Animal Well.sh'
           sh -n 'package/Animal Well Diagnose.sh'
           sh -n package/animalwell/diagnose.sh
+          sh -n package/animalwell/test14-15-wsi.sh
+          grep -Fq 'WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"' package/animalwell/test14-15-wsi.sh
+          if grep -Fq '$RUNTIME/wine/lib/wine/x86_64-unix/win32u.so' package/animalwell/test14-15-wsi.sh; then
+            echo "ERROR: stale undefined RUNTIME alias in test15 win32u guard" >&2
+            exit 1
+          fi
 
       - name: Prove ABI gate fails closed
         run: |
@@ -433,6 +439,35 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256
 
+      - name: Build script-only test15 D3DKMT win32u harness fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-d3dkmt-win32u-harnessfix/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-D3DKMT-WIN32U-HARNESSFIX-DELTA.txt" <<'EOF'
+          Delta over Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip.
+
+          Changed file only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.15
+            * fixes the fail-closed patched-win32u check to use the existing
+              RT runtime root instead of the undefined RUNTIME variable
+
+          The previous D3DKMT-WIN32U delta must already be installed because this
+          delta intentionally does not repeat win32u.so. The harness still verifies
+          the exact patched win32u SHA before any Wine diagnostics run.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-d3dkmt-win32u-harnessfix && zip -qr ../Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip > Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -470,6 +505,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
             dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip
             dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.sha256
           if-no-files-found: error
 
 
