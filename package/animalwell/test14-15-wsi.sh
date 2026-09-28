@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.11"
+log "harness_version=2026-09-28.12"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -403,20 +403,35 @@ mkdir -p "$NO_GL_DIR"
 
 export VK_ICD_FILENAMES="$NO_VULKAN_ICD"
 export LD_LIBRARY_PATH="$NO_GL_DIR:$REAL_LD_LIBRARY_PATH"
+REAL_WINEDEBUG="$WINEDEBUG"
+export WINEDEBUG=-all
 log "--- DISPLAY_SEED_NO_GPU_APIS begin ---"
 log "disabled_vulkan_icd=$VK_ICD_FILENAMES"
 log "shadow_gl_dir=$NO_GL_DIR"
-run_smoke_stage display-seed-no-gpu display-kmt 20 no3d STAGE_ENUM_DISPLAY_PASS
+log "seed_winedebug=$WINEDEBUG"
+log "NOTE prior run proved nulldrv OpenGL lookup is progressing, not deadlocked; allow enough time without debug I/O"
+
+seed_start=$(date +%s 2>/dev/null || echo 0)
+run_smoke_stage display-seed-no-gpu-quiet display-kmt 120 no3d STAGE_ENUM_DISPLAY_PASS
 display_seed_pass=$LAST_STAGE_PASS
+seed_end=$(date +%s 2>/dev/null || echo 0)
+log "DISPLAY_SEED_NATIVE elapsed_s=$((seed_end-seed_start)) pass=$display_seed_pass"
 
-# Repeat the force-refresh path with both Vulkan and OpenGL discovery disabled.
-# If CreateDesktopW now returns, the previous virtual-desktop hang was inside
-# one of the GPU discovery helpers rather than desktop creation itself.
-run_smoke_stage vdesktop-seed-no-gpu vdesktop-display-kmt 25 no3d STAGE_VDESKTOP_CREATE_PASS
-vdesktop_seed_pass=$LAST_STAGE_PASS
+vdesktop_seed_pass=0
+if [ "$display_seed_pass" -ne 1 ]; then
+    log "native seed did not reach STAGE_ENUM_DISPLAY_PASS; trying virtual desktop with the same quiet nulldrv fallback"
+    vdesk_start=$(date +%s 2>/dev/null || echo 0)
+    run_smoke_stage vdesktop-seed-no-gpu-quiet vdesktop-display-kmt 150 no3d STAGE_VDESKTOP_CREATE_PASS
+    vdesktop_seed_pass=$LAST_STAGE_PASS
+    vdesk_end=$(date +%s 2>/dev/null || echo 0)
+    log "DISPLAY_SEED_VDESKTOP elapsed_s=$((vdesk_end-vdesk_start)) pass=$vdesktop_seed_pass"
+else
+    log "SKIP vdesktop seed because native EnumDisplayDevicesW already returned"
+fi
 
-# Restore actual GPU libraries and verify whether the display registry written
-# above survives a wineserver restart in the same prefix.
+# Restore actual GPU libraries/debugging and verify whether the display registry
+# written above survives a wineserver restart in the same prefix.
+export WINEDEBUG="$REAL_WINEDEBUG"
 export VK_ICD_FILENAMES="$REAL_VK_ICD_FILENAMES"
 export LD_LIBRARY_PATH="$REAL_LD_LIBRARY_PATH"
 rm -rf "$NO_GL_DIR"
