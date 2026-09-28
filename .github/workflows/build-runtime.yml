@@ -505,6 +505,35 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip
           cat dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
 
+      - name: Build delta-only SHM env/identity diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test14-shm-env-diag/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST14-SHM-ENV-DIAG.txt" <<'EOF'
+          Delta over the previous test14 patches.
+
+          Only the field harness changed.
+
+          This revision:
+          - logs WSI_X11_FORCE_SHM
+          - logs wrapper SHA-256 when sha256sum is available
+          - requires the new SHM-bypass marker in libmali_wrapper.so
+          - exits with code 22 if a stale wrapper is installed
+          - invokes the native probe through explicit env WSI_X11_FORCE_SHM=1
+            plus the exact VK_ICD_FILENAMES and LD_LIBRARY_PATH values
+
+          Re-run:
+            ./test14-15-wsi.sh test14
+          EOF
+          (cd dist/test14-shm-env-diag && zip -qr ../Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip > Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
+          cat dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
@@ -516,4 +545,6 @@ jobs:
             dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
             dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip
             dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
+            dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
+            dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
           if-no-files-found: error
