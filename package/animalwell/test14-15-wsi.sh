@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.15"
+log "harness_version=2026-09-28.16"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -315,6 +315,60 @@ if [ -f "$WIN32U" ]; then
 else
     log "ERROR win32u missing: $WIN32U"
     exit 34
+fi
+
+# Isolate the x86-64 -> Box64 -> native Vulkan bridge before spending time
+# on Wine display seeding. Native ARM64 test14 already proves the same host
+# loader/ICD can complete instance-extension count + fill directly.
+VKEXT="$RT/tools/vulkan_ext_probe_x64"
+LAST_VKEXT_PASS=0
+run_vkext_stage() {
+    label=$1
+    mode=$2
+    limit=$3
+    stage_log="$LOGDIR/test15-vkext-$label-$STAMP.stage.log"
+    LAST_VKEXT_PASS=0
+    log "--- vkext_label=$label mode=$mode watchdog=${limit}s ---"
+    rm -f "$stage_log" 2>/dev/null || true
+    set +e
+    run_timeout "$limit" env BOX64_LOG=1 "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
+    rc=$?
+    set -e 2>/dev/null || true
+    cat "$stage_log" 2>/dev/null || true
+    if grep -Fq 'VKEXT_RESULT=PASS' "$stage_log" 2>/dev/null; then
+        LAST_VKEXT_PASS=1
+        semantic=PASS
+    else
+        semantic=FAIL
+    fi
+    log "VKEXT_STAGE_RESULT label=$label mode=$mode rc=$rc semantic=$semantic"
+    return 0
+}
+
+vkext_direct_count_pass=0
+vkext_direct_fill_pass=0
+vkext_gipa_count_pass=0
+vkext_gipa_fill_pass=0
+if [ -x "$VKEXT" ]; then
+    log "--- Box64/native Vulkan extension bridge matrix ---"
+    run_vkext_stage direct-count direct-count 10
+    vkext_direct_count_pass=$LAST_VKEXT_PASS
+    run_vkext_stage direct-fill direct-fill 10
+    vkext_direct_fill_pass=$LAST_VKEXT_PASS
+    run_vkext_stage gipa-count gipa-count 10
+    vkext_gipa_count_pass=$LAST_VKEXT_PASS
+    run_vkext_stage gipa-fill gipa-fill 10
+    vkext_gipa_fill_pass=$LAST_VKEXT_PASS
+    log "VKEXT_MATRIX direct_count=$vkext_direct_count_pass direct_fill=$vkext_direct_fill_pass gipa_count=$vkext_gipa_count_pass gipa_fill=$vkext_gipa_fill_pass"
+
+    if [ "$vkext_direct_count_pass" -ne 1 ] || [ "$vkext_direct_fill_pass" -ne 1 ] || \
+       [ "$vkext_gipa_count_pass" -ne 1 ] || [ "$vkext_gipa_fill_pass" -ne 1 ]; then
+        log "TEST15_RESULT=BOX64_VULKAN_BRIDGE_BLOCKER"
+        exit 0
+    fi
+else
+    log "ERROR missing x64 Vulkan bridge probe: $VKEXT"
+    exit 35
 fi
 
 log "--- prefix sanity ---"
