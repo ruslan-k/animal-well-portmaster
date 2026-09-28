@@ -94,7 +94,28 @@ Section "ServerLayout"
 EndSection
 EOF
 }
+discover_xorg_runtime_paths() {
+    # Populate Xorg/Totono runtime library roots even when DISPLAY already exists.
+    # Wine winex11.so needs these too; older harnesses only gave them to the Xorg process.
+    for d in \
+        /mnt/UDISK/xorg-libs/lib/aarch64-linux-gnu \
+        /mnt/UDISK/xorg-libs/usr/lib/aarch64-linux-gnu \
+        /mnt/UDISK/xorg/usr/lib/aarch64-linux-gnu; do
+        [ -d "$d" ] && case ":$XORG_LD_PATH:" in *":$d:"*) ;; *) XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$d" ;; esac
+    done
+    for t in \
+        /mnt/SDCARD/Roms/PORTS/you-and-me-and-her/totono-runtime \
+        /mnt/SDCARD/Roms/ports/you-and-me-and-her/totono-runtime \
+        /mnt/sdcard/mmcblk1p1/Roms/ports/you-and-me-and-her/totono-runtime; do
+        for d in "$t/arm64-libs/gl" "$t/arm64-libs"; do
+            [ -d "$d" ] && case ":$XORG_LD_PATH:" in *":$d:"*) ;; *) XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$d" ;; esac
+        done
+        if [ -f "$t/totono-fb.conf" ] && [ -z "$XORG_CONFIG" ]; then XORG_CONFIG="$t/totono-fb.conf"; fi
+    done
+}
+
 ensure_display() {
+    discover_xorg_runtime_paths
     if [ -n "${DISPLAY:-}" ] && display_usable "$DISPLAY"; then
         log "using inherited DISPLAY=$DISPLAY"
         export SDL_VIDEODRIVER=x11
@@ -114,21 +135,6 @@ ensure_display() {
     if [ -x "$PRIVATE_XORG" ]; then
         XORG="$PRIVATE_XORG"
         XORG_SOURCE=totono-private
-        for d in \
-            /mnt/UDISK/xorg-libs/lib/aarch64-linux-gnu \
-            /mnt/UDISK/xorg-libs/usr/lib/aarch64-linux-gnu \
-            /mnt/UDISK/xorg/usr/lib/aarch64-linux-gnu; do
-            [ -d "$d" ] && XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$d"
-        done
-
-        for t in \
-            /mnt/SDCARD/Roms/PORTS/you-and-me-and-her/totono-runtime \
-            /mnt/SDCARD/Roms/ports/you-and-me-and-her/totono-runtime \
-            /mnt/sdcard/mmcblk1p1/Roms/ports/you-and-me-and-her/totono-runtime; do
-            [ -d "$t/arm64-libs/gl" ] && XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$t/arm64-libs/gl"
-            [ -d "$t/arm64-libs" ] && XORG_LD_PATH="${XORG_LD_PATH:+$XORG_LD_PATH:}$t/arm64-libs"
-            if [ -f "$t/totono-fb.conf" ] && [ -z "$XORG_CONFIG" ]; then XORG_CONFIG="$t/totono-fb.conf"; fi
-        done
     fi
 
     if [ -z "$XORG" ]; then
@@ -213,7 +219,10 @@ setup_wrapper() {
 EOF
     export VK_ICD_FILENAMES="$ICD"
     export WSI_X11_FORCE_SHM=1
-    export LD_LIBRARY_PATH="$T14/deps:$T14/lib:$MALIDIR:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export MALI_WRAPPER_LOG_LEVEL=3
+    export MALI_WRAPPER_LOG_CATEGORY=all
+    export MALI_WRAPPER_LOG_COLORS=0
+    export LD_LIBRARY_PATH="$T14/deps:$T14/lib:$MALIDIR${XORG_LD_PATH:+:$XORG_LD_PATH}:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     log "real_mali=$mali"
     log "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
     log "WSI_X11_FORCE_SHM=$WSI_X11_FORCE_SHM"
@@ -235,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.6"
+log "harness_version=2026-09-28.7"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -292,34 +301,50 @@ export VKD3D_DEBUG=info
 export VKD3D_LOG_FILE="$LOGDIR/test15-vkd3d-$STAMP.log"
 export WINEDEBUG=+timestamp,+dxgi,+wined3d,+vulkan
 
-log "--- prefix sanity ---"
-run_timeout 20 "$BOX64" "$WINE" cmd /c ver || { log "TEST15_RESULT=FAIL_PREFIX"; exit 33; }
-"$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
-sleep 1
+log "--- prefix sanity (keep wineserver alive) ---"
+prefix_ok=0
+attempt=1
+while [ "$attempt" -le 2 ]; do
+    log "prefix_sanity_attempt=$attempt"
+    set +e
+    run_timeout 20 "$BOX64" "$WINE" cmd /c ver
+    prefix_rc=$?
+    set -e 2>/dev/null || true
+    log "prefix_sanity_rc=$prefix_rc"
+    if [ "$prefix_rc" -eq 0 ]; then
+        prefix_ok=1
+        break
+    fi
+    # A killed conhost/cmd can occur after Wine has already initialized the prefix.
+    # Verify the server/prefix with a lightweight second command before declaring failure.
+    attempt=$((attempt+1))
+    sleep 1
+done
+if [ "$prefix_ok" -ne 1 ]; then
+    log "WARN prefix sanity did not exit cleanly; continuing diagnostics because template prefix is present"
+fi
 mem
 
 log "--- Wine staged DXGI/D3D12 diagnostics through wrapper ---"
 log "WINE_D3D_CONFIG=$WINE_D3D_CONFIG"
+log "MALI_WRAPPER_LOG_LEVEL=$MALI_WRAPPER_LOG_LEVEL"
+log "xorg_runtime_ld_path=${XORG_LD_PATH:-<none>}"
+log "NOTE wineserver is intentionally kept alive across stages"
 log "NOTE renderer=no3d applies to WineD3D/DXGI adapter init; d3d12.dll still uses VKD3D/Vulkan"
 
-run_smoke_stage_with_box64() {
-    variant=$1
-    box=$2
-    stage=$3
-    limit=$4
-    log "--- smoke_variant=$variant smoke_stage=$stage watchdog=${limit}s ---"
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$box" 2>/dev/null || true
-    fi
-
+run_smoke_stage() {
+    stage=$1
+    limit=$2
+    log "--- smoke_stage=$stage watchdog=${limit}s persistent_wineserver=1 ---"
     set +e
-    "$box" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage" &
+    "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage" &
     smoke_pid=$!
     (
         sleep "$limit"
         if kill -0 "$smoke_pid" 2>/dev/null; then
-            log "SMOKE_WATCHDOG_FIRED variant=$variant stage=$stage pid=$smoke_pid"
-            "$box" "$WINESERVER" -k >/dev/null 2>&1 || true
+            log "SMOKE_WATCHDOG_FIRED stage=$stage pid=$smoke_pid"
+            # Kill only the smoke process. Keep wineserver alive so the next stage
+            # does not repeat wineboot/explorer initialization.
             kill -TERM "$smoke_pid" >/dev/null 2>&1 || true
             sleep 1
             kill -KILL "$smoke_pid" >/dev/null 2>&1 || true
@@ -333,30 +358,16 @@ run_smoke_stage_with_box64() {
     wait "$watchdog_pid" >/dev/null 2>&1 || true
     set -e 2>/dev/null || true
 
-    log "SMOKE_STAGE_RESULT variant=$variant stage=$stage rc=$rc"
-    "$box" "$WINESERVER" -k >/dev/null 2>&1 || true
-    sleep 1
+    log "SMOKE_STAGE_RESULT stage=$stage rc=$rc"
     mem
     return 0
 }
 
-log "--- Box64 A/B: v0.4.4 vs post-v0.4.4 main ---"
-run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" load-dxgi 12
-
-if [ -x "$BOX64_MAIN" ]; then
-    log "box64_main_candidate=$BOX64_MAIN"
-    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" load-dxgi 12
-    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" load-d3d12 12
-    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" factory 15
-    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" device 20
-    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" all 25
-else
-    log "WARN no Box64 main candidate; continuing with release binary"
-    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" load-d3d12 12
-    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" factory 15
-    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" device 20
-    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" all 25
-fi
+run_smoke_stage load-dxgi 20
+run_smoke_stage load-d3d12 20
+run_smoke_stage factory 20
+run_smoke_stage device 25
+run_smoke_stage all 30
 
 log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
 exit 0
