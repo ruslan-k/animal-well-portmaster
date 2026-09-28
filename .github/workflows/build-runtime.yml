@@ -393,6 +393,46 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
 
+      - name: Build delta-only test15 D3DKMT win32u patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-d3dkmt-win32u-delta/animalwell
+          mkdir -p "$D/runtime/wine/lib/wine/x86_64-unix" "$D/runtime/wine-patches"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/wine/lib/wine/x86_64-unix/win32u.so              "$D/runtime/wine/lib/wine/x86_64-unix/win32u.so"
+          cp .work/package/animalwell/runtime/wine-patches/D3DKMT-NOVULKAN.txt              "$D/runtime/wine-patches/D3DKMT-NOVULKAN.txt"
+          cat >"$D/TEST15-D3DKMT-WIN32U-DELTA.txt" <<'EOF'
+          Delta over the previous SAME-WINESERVER-SEED diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.14
+            * requires the exact patched win32u.so SHA before running
+          - runtime/wine/lib/wine/x86_64-unix/win32u.so
+            * exact Wine 11.18/Kron4ek binary with one-byte patch
+            * d3dkmt_init_vulkan first opcode changed to RET
+            * disables only D3DKMT's private Vulkan instance
+            * does not disable Vulkan for VKD3D/D3D12
+          - runtime/wine-patches/D3DKMT-NOVULKAN.txt
+            * exact original/patched SHA and symbol metadata
+
+          Rationale:
+          same-wineserver field testing proves DISPLAY1 survives and the crash occurs
+          only when NtGdiDdDDIOpenAdapterFromLuid initializes D3DKMT's private Vulkan
+          instance. Wine already treats a missing D3DKMT Vulkan instance as non-fatal.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          sha256sum "$D/runtime/wine/lib/wine/x86_64-unix/win32u.so"
+          objdump -d --start-address=0x44940 --stop-address=0x44950             "$D/runtime/wine/lib/wine/x86_64-unix/win32u.so"
+          (cd dist/test15-d3dkmt-win32u-delta && zip -qr ../Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip > Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -428,6 +468,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.sha256
             dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip
             dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256
           if-no-files-found: error
 
 
