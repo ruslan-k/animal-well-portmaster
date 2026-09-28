@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.19"
+log "harness_version=2026-09-28.20"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -259,6 +259,12 @@ if strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -Fq 'WSI_X11_FORCE_S
 else
     log "ERROR wrapper_shm_bypass_marker=missing (stale wrapper binary)"
     exit 22
+fi
+if strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -Fq 'AW_GIPA_GUARD_BLOCK'; then
+    log "wrapper_gipa_guard_marker=present"
+else
+    log "ERROR wrapper_gipa_guard_marker=missing (install .20 wrapper delta)"
+    exit 23
 fi
 strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -E 'libmali\.so|Mali Wrapper|WSI_X11_FORCE_SHM' | head -40 || true
 
