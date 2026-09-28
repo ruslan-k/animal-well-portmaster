@@ -161,6 +161,38 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-NO3D-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
 
+      - name: Build delta-only test15 staged diagnostic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-staged-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-STAGED-DELTA.txt" <<'EOF'
+          Delta over the previous test15 NO3D patch.
+
+          Changed files only:
+          - test14-15-wsi.sh now runs five independent probes:
+              load-dxgi
+              load-d3d12
+              factory
+              device
+              all
+            Each probe has its own timeout and wineserver reset.
+          - d3d12_smoke.exe now supports those modes and prints unbuffered
+            STAGE_LOAD_DXGI_*, STAGE_LOAD_D3D12_*,
+            STAGE_DXGI_FACTORY_*, and STAGE_D3D12_DEVICE_* markers.
+
+          Re-run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-staged-delta && zip -qr ../Animal-Well-TSPS-test15-STAGED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-STAGED-DELTA.zip > Animal-Well-TSPS-test15-STAGED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-STAGED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -182,6 +214,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-PREFIX-DELTA.sha256
             dist/Animal-Well-TSPS-test15-NO3D-DELTA.zip
             dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-STAGED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
           if-no-files-found: error
 
 
