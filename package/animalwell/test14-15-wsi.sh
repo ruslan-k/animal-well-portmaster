@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.8"
+log "harness_version=2026-09-28.9"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -325,12 +325,13 @@ fi
 sleep 1
 mem
 
-log "--- Wine display/KMT + renderer matrix diagnostics ---"
+log "--- Wine display/KMT + virtual-desktop diagnostics ---"
 log "MALI_WRAPPER_LOG_LEVEL=$MALI_WRAPPER_LOG_LEVEL"
 log "MALI_WRAPPER_LOG_CATEGORY=$MALI_WRAPPER_LOG_CATEGORY"
 log "xorg_runtime_ld_path=${XORG_LD_PATH:-<none>}"
-log "NOTE every probe gets a fresh wineserver to avoid stale state after watchdog termination"
-log "NOTE factory probes compare WineD3D renderer=no3d, gl and vulkan"
+log "NOTE native EnumDisplayDevicesW previously returned zero sources"
+log "NOTE vdesktop-* modes create a 1280x720 Wine virtual desktop inside the probe"
+log "NOTE Wine source forces update_display_cache(TRUE) for DF_WINE_VIRTUAL_DESKTOP"
 
 LAST_STAGE_PASS=0
 run_smoke_stage() {
@@ -381,40 +382,43 @@ run_smoke_stage() {
     return 0
 }
 
-# Reproduce the exact display/KMT primitives used by Wine's no3d adapter path.
-run_smoke_stage display-kmt display-kmt 20 no3d SMOKE_RESULT=PASS_DISPLAY_KMT
+# Keep one short native baseline. This is expected to expose the existing zero-display condition.
+run_smoke_stage display-native display-kmt 12 no3d SMOKE_RESULT=PASS_DISPLAY_KMT
 
-# DLL loading is already proven, but keep one cheap baseline in this harness.
-run_smoke_stage load-dxgi load-dxgi 15 no3d SMOKE_RESULT=PASS_LOAD_DXGI
-run_smoke_stage load-d3d12 load-d3d12 15 no3d SMOKE_RESULT=PASS_LOAD_D3D12
+# The important A/B: enter a Wine virtual desktop before asking Win32 for displays.
+run_smoke_stage display-vdesktop vdesktop-display-kmt 25 no3d SMOKE_RESULT=PASS_DISPLAY_KMT
+vdesktop_display_pass=$LAST_STAGE_PASS
 
-# Compare the exact failing CreateDXGIFactory1 call across WineD3D backends.
-run_smoke_stage factory-no3d factory 20 no3d SMOKE_RESULT=PASS_DXGI_FACTORY
-factory_no3d_pass=$LAST_STAGE_PASS
-run_smoke_stage factory-gl factory 25 gl SMOKE_RESULT=PASS_DXGI_FACTORY
-factory_gl_pass=$LAST_STAGE_PASS
-run_smoke_stage factory-vulkan factory 30 vulkan SMOKE_RESULT=PASS_DXGI_FACTORY
-factory_vulkan_pass=$LAST_STAGE_PASS
+if [ "$vdesktop_display_pass" -eq 1 ]; then
+    run_smoke_stage factory-vdesktop-no3d vdesktop-factory 25 no3d SMOKE_RESULT=PASS_DXGI_FACTORY
+    factory_no3d_pass=$LAST_STAGE_PASS
 
-# Only try D3D12CreateDevice on renderers whose DXGI factory actually returned.
-if [ "$factory_no3d_pass" -eq 1 ]; then
-    run_smoke_stage device-no3d device 30 no3d SMOKE_RESULT=PASS_D3D12_DEVICE
-else
-    log "SKIP device-no3d because factory-no3d did not pass"
-fi
-if [ "$factory_gl_pass" -eq 1 ]; then
-    run_smoke_stage device-gl device 35 gl SMOKE_RESULT=PASS_D3D12_DEVICE
-else
-    log "SKIP device-gl because factory-gl did not pass"
-fi
-if [ "$factory_vulkan_pass" -eq 1 ]; then
-    run_smoke_stage device-vulkan device 40 vulkan SMOKE_RESULT=PASS_D3D12_DEVICE
-    device_vulkan_pass=$LAST_STAGE_PASS
-    if [ "$device_vulkan_pass" -eq 1 ]; then
-        run_smoke_stage all-vulkan all 45 vulkan "D3D12 bootstrap smoke: PASS"
+    run_smoke_stage factory-vdesktop-gl vdesktop-factory 30 gl SMOKE_RESULT=PASS_DXGI_FACTORY
+    factory_gl_pass=$LAST_STAGE_PASS
+
+    run_smoke_stage factory-vdesktop-vulkan vdesktop-factory 35 vulkan SMOKE_RESULT=PASS_DXGI_FACTORY
+    factory_vulkan_pass=$LAST_STAGE_PASS
+
+    if [ "$factory_no3d_pass" -eq 1 ]; then
+        run_smoke_stage device-vdesktop-no3d vdesktop-device 35 no3d SMOKE_RESULT=PASS_D3D12_DEVICE
+        device_no3d_pass=$LAST_STAGE_PASS
+        if [ "$device_no3d_pass" -eq 1 ]; then
+            run_smoke_stage all-vdesktop-no3d vdesktop-all 45 no3d "D3D12 bootstrap smoke: PASS"
+        fi
+    fi
+    if [ "$factory_gl_pass" -eq 1 ]; then
+        run_smoke_stage device-vdesktop-gl vdesktop-device 40 gl SMOKE_RESULT=PASS_D3D12_DEVICE
+    fi
+    if [ "$factory_vulkan_pass" -eq 1 ]; then
+        run_smoke_stage device-vdesktop-vulkan vdesktop-device 45 vulkan SMOKE_RESULT=PASS_D3D12_DEVICE
+        device_vulkan_pass=$LAST_STAGE_PASS
+        if [ "$device_vulkan_pass" -eq 1 ]; then
+            run_smoke_stage all-vdesktop-vulkan vdesktop-all 55 vulkan "D3D12 bootstrap smoke: PASS"
+        fi
     fi
 else
-    log "SKIP device-vulkan because factory-vulkan did not pass"
+    log "VDESKTOP_RESULT=FAIL_NO_WINDOWS_DISPLAY"
+    log "SKIP virtual-desktop DXGI factory/device matrix because display-kmt did not pass"
 fi
 
 log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
