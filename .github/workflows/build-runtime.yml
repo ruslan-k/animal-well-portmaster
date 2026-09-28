@@ -639,7 +639,7 @@ jobs:
         run: |
           set -euo pipefail
           sh -n package/animalwell/test14-15-wsi.sh
-          grep -Fq 'harness_version=2026-09-28.17' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'harness_version=2026-09-28.20' package/animalwell/test14-15-wsi.sh
           grep -Fq 'MALI_WRAPPER_LOG_CATEGORY="$log_category"' package/animalwell/test14-15-wsi.sh
           grep -Fq 'MALI_WRAPPER_WORKAROUND=MALI_WRAPPER_LOG_CATEGORY=off' package/animalwell/test14-15-wsi.sh
 
@@ -714,7 +714,7 @@ jobs:
           file dist/vkcreate-probe/vulkan_ext_probe_x64 | grep -q 'x86-64'
           bash scripts/check-abi.sh dist/vkcreate-probe 2>&1 | tee dist/vkcreate-probe/abi-report.txt
           sh -n package/animalwell/test14-15-wsi.sh
-          grep -Fq 'harness_version=2026-09-28.19' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'harness_version=2026-09-28.20' package/animalwell/test14-15-wsi.sh
           grep -Fq 'VKPOSTCREATE_STAGE_RESULT' package/animalwell/test14-15-wsi.sh
           grep -Fq 'postcreate-wine5' scripts/vulkan_ext_probe_x64.c
 
@@ -983,6 +983,47 @@ jobs:
               start=s.find('WSIALLOC_ASSERT_VERSION()')
               raise SystemExit('failed to patch X11 wsialloc init block; nearby='+repr(s[start:start+500]))
           p.write_text(s.replace(old,new,1))
+
+          # The TSPS r42 Mali driver crashes when its GIPA is asked for some
+          # recent vendor-specific physical-device entry points that Wine 11.18
+          # eagerly probes while building the instance dispatch table.
+          p=Path('/tmp/mali-wrapper/src/core/mali_wrapper_icd.cpp')
+          s=p.read_text()
+          start=s.find('static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL internal_vkGetInstanceProcAddr')
+          if start < 0:
+              raise SystemExit('internal_vkGetInstanceProcAddr not found')
+          needle='    auto mali_proc_addr = LibraryLoader::Instance().GetMaliGetInstanceProcAddr();'
+          pos=s.find(needle,start)
+          if pos < 0:
+              raise SystemExit('Mali GIPA fallback not found')
+          guard='''    /*
+     * ANIMAL WELL / TSPS compatibility guard.
+     * The vendor r42 Mali GIPA crashes instead of returning NULL for several
+     * newer vendor-specific query names. Wine 11.18 eagerly probes every
+     * generated instance proc, so fail closed for entry points not used by
+     * VKD3D/ANIMAL WELL rather than entering the broken vendor lookup.
+     */
+    static const char *const aw_unsafe_gipa_names[] = {
+        "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM",
+        "vkGetPhysicalDeviceExternalTensorPropertiesARM",
+        "vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM",
+        "vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM",
+        "vkGetPhysicalDeviceOpticalFlowImageFormatsNV",
+        "vkGetPhysicalDeviceCooperativeVectorPropertiesNV",
+        "vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV",
+    };
+    for (const char *unsafe_name : aw_unsafe_gipa_names)
+    {
+        if (strcmp(pName, unsafe_name) == 0)
+        {
+            fprintf(stderr, "AW_GIPA_GUARD_BLOCK name=%s\\n", pName);
+            return nullptr;
+        }
+    }
+
+'''
+          s=s[:pos]+guard+s[pos:]
+          p.write_text(s)
           PY
           cat >/tmp/aarch64-toolchain.cmake <<'EOF'
           set(CMAKE_SYSTEM_NAME Linux)
@@ -1211,6 +1252,43 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
 
+      - name: Build delta-only Mali GIPA guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-mali-gipa-guard/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          strings "$D/runtime/test14/lib/libmali_wrapper.so" | grep -Fq 'AW_GIPA_GUARD_BLOCK'
+          cat >"$D/TEST15-MALI-GIPA-GUARD-DELTA.txt" <<'EOF'
+          Delta over test15 post-create .19.
+
+          Changed files only:
+          - test14-15-wsi.sh
+          - runtime/test14/lib/libmali_wrapper.so
+
+          Revision 2026-09-28.20:
+          - confirms the .19 crash is at
+              vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM
+          - prevents the TSPS r42 Mali driver GIPA from entering a small set of
+            newer ARM/NV vendor-specific physical-device queries that are not used
+            by ANIMAL WELL/VKD3D and should safely resolve to NULL
+          - emits AW_GIPA_GUARD_BLOCK for each blocked lookup
+          - keeps the existing .19 post-create proc scan so the next boundary is
+            visible immediately
+          - requires the patched wrapper marker before test15 proceeds
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-mali-gipa-guard && zip -qr ../Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip > Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
@@ -1226,6 +1304,8 @@ jobs:
             dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
             dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip
             dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip
+            dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
           if-no-files-found: error
 
 
