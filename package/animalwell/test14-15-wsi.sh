@@ -215,6 +215,7 @@ EOF
     export LD_LIBRARY_PATH="$T14/deps:$T14/lib:$MALIDIR:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     log "real_mali=$mali"
     log "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
+    log "WSI_X11_FORCE_SHM=$WSI_X11_FORCE_SHM"
     log "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 }
 
@@ -233,19 +234,40 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.2"
+log "harness_version=2026-09-28.3"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
 setup_wrapper || exit 21
 
-log "--- wrapper strings/path check ---"
-strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -E 'libmali\.so|Mali Wrapper|WSI' | head -30 || true
+log "--- wrapper identity/path check ---"
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$T14/lib/libmali_wrapper.so" 2>/dev/null || true
+fi
+if strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -Fq 'WSI_X11_FORCE_SHM: skipping unused wsialloc/DMA-BUF allocator initialization.'; then
+    log "wrapper_shm_bypass_marker=present"
+else
+    log "ERROR wrapper_shm_bypass_marker=missing (stale wrapper binary)"
+    exit 22
+fi
+strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -E 'libmali\.so|Mali Wrapper|WSI_X11_FORCE_SHM' | head -40 || true
 
 if [ "$MODE" = test14 ]; then
     log "--- native Xlib WSI/swapchain probe ---"
     set +e
-    run_timeout 30 "$T14/vk_wsi_xlib_probe"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout -k 5 30 env \
+            WSI_X11_FORCE_SHM=1 \
+            VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
+            LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+            "$T14/vk_wsi_xlib_probe"
+    else
+        env \
+            WSI_X11_FORCE_SHM=1 \
+            VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
+            LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+            "$T14/vk_wsi_xlib_probe"
+    fi
     rc=$?
     set -e 2>/dev/null || true
     mem
