@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.18"
+log "harness_version=2026-09-28.19"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -421,7 +421,7 @@ run_vkcreate_stage() {
     rc=$?
     set -e 2>/dev/null || true
     cat "$stage_log" 2>/dev/null || true
-    if grep -Fq 'VKCREATE_RESULT=PASS' "$stage_log" 2>/dev/null; then
+    if [ "$rc" -eq 0 ] && grep -Fq 'VKCREATE_RESULT=PASS' "$stage_log" 2>/dev/null; then
         LAST_VKCREATE_PASS=1
         semantic=PASS
     else
@@ -457,6 +457,46 @@ else
     log "TEST15_RESULT=BOX64_VULKAN_CREATE_BLOCKER"
     exit 0
 fi
+
+# Wine 11.18 win32u caches a large table of instance/physical-device
+# entry points immediately after host vkCreateInstance. The .18 field run
+# proved the raw Wine-like create itself is healthy, while Wine faults
+# before returning from its Unix create call. Reproduce the post-create
+# GIPA scan and first physical-device initialization calls outside Wine.
+LAST_POSTCREATE_PASS=0
+run_vkpostcreate_stage() {
+    stage_log="$LOGDIR/test15-vkpostcreate-$STAMP.stage.log"
+    LAST_POSTCREATE_PASS=0
+    log "--- vkpostcreate_label=wine5-instance-procs mode=postcreate-wine5 wrapper_log_category=off watchdog=20s ---"
+    rm -f "$stage_log" 2>/dev/null || true
+    set +e
+    run_timeout 20 env \
+        BOX64_LOG=2 \
+        MALI_WRAPPER_LOG_CATEGORY=off \
+        "$BOX64" "$VKEXT" postcreate-wine5 >"$stage_log" 2>&1
+    rc=$?
+    set -e 2>/dev/null || true
+    cat "$stage_log" 2>/dev/null || true
+    if [ "$rc" -eq 0 ] && grep -Fq 'VKPOSTCREATE_RESULT=PASS' "$stage_log" 2>/dev/null; then
+        LAST_POSTCREATE_PASS=1
+        semantic=PASS
+    else
+        semantic=FAIL
+    fi
+    log "VKPOSTCREATE_STAGE_RESULT rc=$rc semantic=$semantic"
+    return 0
+}
+
+run_vkpostcreate_stage
+if [ "$LAST_POSTCREATE_PASS" -eq 1 ]; then
+    log "BOX64_VULKAN_POSTCREATE_RESULT=PASS"
+    log "NOTE host create + instance GIPA scan + physical-device bootstrap work outside Wine"
+else
+    log "BOX64_VULKAN_POSTCREATE_RESULT=FAIL"
+    log "TEST15_RESULT=BOX64_VULKAN_POSTCREATE_BLOCKER"
+    exit 0
+fi
+
 log "--- prefix sanity ---"
 prefix_ok=0
 attempt=1
@@ -595,8 +635,12 @@ if [ "$display_same_server_pass" -eq 1 ]; then
     factory_no3d_pass=$LAST_STAGE_PASS
 
     if [ "$factory_no3d_pass" -eq 1 ]; then
+        old_box64_log=$BOX64_LOG
+        export BOX64_LOG=2
+        log "BOX64_LOG=2 for D3D12 device stage to expose the last Vulkan bridge lookup before any fault"
         run_smoke_stage device-same-server-no3d device 45 no3d SMOKE_RESULT=PASS_D3D12_DEVICE 1
         device_no3d_pass=$LAST_STAGE_PASS
+        export BOX64_LOG=$old_box64_log
     else
         device_no3d_pass=0
     fi
@@ -605,7 +649,10 @@ if [ "$display_same_server_pass" -eq 1 ]; then
         run_smoke_stage factory-same-server-gl factory 35 gl SMOKE_RESULT=PASS_DXGI_FACTORY 1
         factory_gl_pass=$LAST_STAGE_PASS
         if [ "$factory_gl_pass" -eq 1 ]; then
+            old_box64_log=$BOX64_LOG
+            export BOX64_LOG=2
             run_smoke_stage device-same-server-gl device 45 gl SMOKE_RESULT=PASS_D3D12_DEVICE 1
+            export BOX64_LOG=$old_box64_log
         fi
     fi
 
