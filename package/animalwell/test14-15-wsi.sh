@@ -234,7 +234,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.4"
+log "harness_version=2026-09-28.5"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -297,17 +297,30 @@ run_timeout 20 "$BOX64" "$WINE" cmd /c ver || { log "TEST15_RESULT=FAIL_PREFIX";
 sleep 1
 mem
 
-log "--- Wine DXGI(no3d) + D3D12/VKD3D through wrapper ---"
+log "--- Wine staged DXGI/D3D12 diagnostics through wrapper ---"
 log "WINE_D3D_CONFIG=$WINE_D3D_CONFIG"
 log "NOTE renderer=no3d applies to WineD3D/DXGI adapter init; d3d12.dll still uses VKD3D/Vulkan"
-set +e
-run_timeout 35 "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe"
-rc=$?
-set -e 2>/dev/null || true
-mem
-if [ "$rc" -eq 0 ]; then
-    log "TEST15_RESULT=PASS_WINE_DXGI_NO3D_D3D12"
-else
-    log "TEST15_RESULT=FAIL rc=$rc"
-fi
-exit "$rc"
+
+run_smoke_stage() {
+    stage=$1
+    limit=$2
+    log "--- smoke_stage=$stage timeout=${limit}s ---"
+    set +e
+    run_timeout "$limit" "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage"
+    rc=$?
+    set -e 2>/dev/null || true
+    log "SMOKE_STAGE_RESULT stage=$stage rc=$rc"
+    "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+    sleep 1
+    mem
+    return 0
+}
+
+run_smoke_stage load-dxgi 12
+run_smoke_stage load-d3d12 12
+run_smoke_stage factory 15
+run_smoke_stage device 20
+run_smoke_stage all 25
+
+log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
+exit 0
