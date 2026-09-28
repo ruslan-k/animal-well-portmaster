@@ -996,32 +996,32 @@ jobs:
           pos=s.find(needle,start)
           if pos < 0:
               raise SystemExit('Mali GIPA fallback not found')
-          guard='''    /*
-     * ANIMAL WELL / TSPS compatibility guard.
-     * The vendor r42 Mali GIPA crashes instead of returning NULL for several
-     * newer vendor-specific query names. Wine 11.18 eagerly probes every
-     * generated instance proc, so fail closed for entry points not used by
-     * VKD3D/ANIMAL WELL rather than entering the broken vendor lookup.
-     */
-    static const char *const aw_unsafe_gipa_names[] = {
-        "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM",
-        "vkGetPhysicalDeviceExternalTensorPropertiesARM",
-        "vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM",
-        "vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM",
-        "vkGetPhysicalDeviceOpticalFlowImageFormatsNV",
-        "vkGetPhysicalDeviceCooperativeVectorPropertiesNV",
-        "vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV",
-    };
-    for (const char *unsafe_name : aw_unsafe_gipa_names)
-    {
-        if (strcmp(pName, unsafe_name) == 0)
-        {
-            fprintf(stderr, "AW_GIPA_GUARD_BLOCK name=%s\\n", pName);
-            return nullptr;
-        }
-    }
-
-'''
+          guard=(
+              '    /*\\n'
+              '     * ANIMAL WELL / TSPS compatibility guard.\\n'
+              '     * The vendor r42 Mali GIPA crashes instead of returning NULL for several\\n'
+              '     * newer vendor-specific query names. Wine 11.18 eagerly probes every\\n'
+              '     * generated instance proc, so fail closed for entry points not used by\\n'
+              '     * VKD3D/ANIMAL WELL rather than entering the broken vendor lookup.\\n'
+              '     */\\n'
+              '    static const char *const aw_unsafe_gipa_names[] = {\\n'
+              '        "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM",\\n'
+              '        "vkGetPhysicalDeviceExternalTensorPropertiesARM",\\n'
+              '        "vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM",\\n'
+              '        "vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM",\\n'
+              '        "vkGetPhysicalDeviceOpticalFlowImageFormatsNV",\\n'
+              '        "vkGetPhysicalDeviceCooperativeVectorPropertiesNV",\\n'
+              '        "vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV",\\n'
+              '    };\\n'
+              '    for (const char *unsafe_name : aw_unsafe_gipa_names)\\n'
+              '    {\\n'
+              '        if (strcmp(pName, unsafe_name) == 0)\\n'
+              '        {\\n'
+              '            fprintf(stderr, "AW_GIPA_GUARD_BLOCK name=%s\\\\n", pName);\\n'
+              '            return nullptr;\\n'
+              '        }\\n'
+              '    }\\n\\n'
+          )
           s=s[:pos]+guard+s[pos:]
           p.write_text(s)
           PY
