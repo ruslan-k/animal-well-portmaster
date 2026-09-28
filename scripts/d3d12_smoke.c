@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef DF_WINE_VIRTUAL_DESKTOP
+#define DF_WINE_VIRTUAL_DESKTOP 0x80000000u
+#endif
+
 /*
  * Header-independent D3D12/DXGI bootstrap probe.
  *
@@ -61,6 +65,38 @@ static void release_com(void *object)
         ((release_fn)vtbl[2])(object);
 }
 
+static int enter_virtual_desktop(void)
+{
+    DEVMODEW mode;
+    HDESK desktop;
+
+    memset(&mode, 0, sizeof(mode));
+    mode.dmSize = sizeof(mode);
+    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    mode.dmPelsWidth = 1280;
+    mode.dmPelsHeight = 720;
+
+    puts("STAGE_VDESKTOP_CREATE_BEGIN");
+    desktop = CreateDesktopW(L"AnimalWellTest", NULL, &mode,
+            DF_WINE_VIRTUAL_DESKTOP, DESKTOP_ALL_ACCESS, NULL);
+    if (!desktop)
+    {
+        printf("STAGE_VDESKTOP_CREATE_FAIL error=%lu\n", (unsigned long)GetLastError());
+        return 30;
+    }
+    puts("STAGE_VDESKTOP_CREATE_PASS");
+
+    puts("STAGE_VDESKTOP_SWITCH_BEGIN");
+    if (!SetThreadDesktop(desktop))
+    {
+        printf("STAGE_VDESKTOP_SWITCH_FAIL error=%lu\n", (unsigned long)GetLastError());
+        return 31;
+    }
+    puts("STAGE_VDESKTOP_SWITCH_PASS");
+    Sleep(250);
+    return 0;
+}
+
 static void print_wide(const WCHAR *w, char *out, size_t out_size)
 {
     int n;
@@ -90,21 +126,29 @@ static int probe_display_kmt(void)
     LONG status;
 
     puts("STAGE_ENUM_DISPLAY_BEGIN");
-    for (i = 0; i < 16; ++i)
+    for (unsigned int attempt = 0; attempt < 20 && !primary_name[0]; ++attempt)
     {
-        memset(&display, 0, sizeof(display));
-        display.cb = sizeof(display);
-        if (!EnumDisplayDevicesW(NULL, i, &display, 0))
-            break;
+        count = 0;
+        primary_name[0] = 0;
+        for (i = 0; i < 16; ++i)
+        {
+            memset(&display, 0, sizeof(display));
+            display.cb = sizeof(display);
+            if (!EnumDisplayDevicesW(NULL, i, &display, 0))
+                break;
 
-        print_wide(display.DeviceName, name_utf8, sizeof(name_utf8));
-        print_wide(display.DeviceString, string_utf8, sizeof(string_utf8));
-        printf("DISPLAY[%u] name=%s string=%s flags=0x%08lx\n",
-               i, name_utf8, string_utf8, (unsigned long)display.StateFlags);
-        ++count;
+            print_wide(display.DeviceName, name_utf8, sizeof(name_utf8));
+            print_wide(display.DeviceString, string_utf8, sizeof(string_utf8));
+            printf("DISPLAY[%u] name=%s string=%s flags=0x%08lx attempt=%u\n",
+                   i, name_utf8, string_utf8, (unsigned long)display.StateFlags, attempt);
+            ++count;
 
-        if ((display.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) && !primary_name[0])
-            lstrcpynW(primary_name, display.DeviceName, 32);
+            if ((display.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) && !primary_name[0])
+                lstrcpynW(primary_name, display.DeviceName, 32);
+        }
+        printf("EnumDisplayDevicesW attempt=%u count=%u primary=%s\n",
+               attempt, count, primary_name[0] ? "present" : "missing");
+        if (!primary_name[0]) Sleep(250);
     }
     printf("EnumDisplayDevicesW count=%u primary=%s\n",
            count, primary_name[0] ? "present" : "missing");
@@ -182,6 +226,8 @@ static int probe_display_kmt(void)
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "all";
+    int vdesktop = 0;
+    int desktop_rc;
     HMODULE dxgi = NULL, d3d12 = NULL;
     pfn_CreateDXGIFactory1 create_factory = NULL;
     pfn_D3D12CreateDevice create_device = NULL;
@@ -192,6 +238,20 @@ int main(int argc, char **argv)
     printf("ANIMAL WELL D3D12 bootstrap smoke\n");
     printf("mode=%s\n", mode);
     printf("requested_feature_level=0x%04x (D3D_FEATURE_LEVEL_11_0)\n", 0xb000);
+
+    if (!strncmp(mode, "vdesktop-", 9))
+    {
+        vdesktop = 1;
+        mode += 9;
+        printf("effective_mode=%s virtual_desktop=1\n", mode);
+        desktop_rc = enter_virtual_desktop();
+        if (desktop_rc)
+            return desktop_rc;
+    }
+    else
+    {
+        printf("effective_mode=%s virtual_desktop=0\n", mode);
+    }
 
     if (!strcmp(mode, "display-kmt"))
         return probe_display_kmt();
