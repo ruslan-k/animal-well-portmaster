@@ -332,7 +332,7 @@ run_vkext_stage() {
     log "--- vkext_label=$label mode=$mode no_overlay=$no_overlay watchdog=${limit}s ---"
     rm -f "$stage_log" 2>/dev/null || true
     set +e
-    run_timeout "$limit" env BOX64_LOG=1 BOX64_NOVULKANOVERLAY="$no_overlay" "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
+    run_timeout "$limit" env BOX64_LOG=2 BOX64_NOVULKANOVERLAY="$no_overlay" "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
     rc=$?
     set -e 2>/dev/null || true
     cat "$stage_log" 2>/dev/null || true
