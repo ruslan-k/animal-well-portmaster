@@ -226,6 +226,40 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
 
+      - name: Build delta-only test15 virtual desktop diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-vdesktop-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-VDESKTOP-DELTA.txt" <<'EOF'
+          Delta over the previous DISPLAY-KMT diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * compares native Win32 display enumeration with Wine virtual desktop mode
+            * tests vdesktop DXGI factories for no3d, gl, and vulkan
+            * only proceeds to D3D12CreateDevice when the matching factory passes
+          - runtime/tools/d3d12_smoke.exe
+            * adds vdesktop-* modes
+            * creates a 1280x720 Wine virtual desktop with DF_WINE_VIRTUAL_DESKTOP
+            * switches the test thread to that desktop before display/DXGI probing
+            * retries EnumDisplayDevicesW while Wine refreshes display topology
+
+          Wine 11.18 forces update_display_cache(TRUE) when the virtual desktop
+          is created and again when the thread switches into that desktop.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-vdesktop-delta && zip -qr ../Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip > Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -251,6 +285,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
             dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip
             dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip
+            dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
           if-no-files-found: error
 
 
