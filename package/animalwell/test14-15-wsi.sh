@@ -22,6 +22,7 @@ MALIDIR="/tmp/animalwell-mali-driver"
 ICD="/tmp/animalwell-mali-wrapper-$$.json"
 PFX="/tmp/animalwell-test15-prefix"
 BOX64="$RT/box64/box64"
+BOX64_MAIN="$RT/box64/box64-test15-main"
 WINE="$RT/wine/bin/wine"
 WINESERVER="$RT/wine/bin/wineserver"
 
@@ -234,7 +235,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.5"
+log "harness_version=2026-09-28.6"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -301,26 +302,61 @@ log "--- Wine staged DXGI/D3D12 diagnostics through wrapper ---"
 log "WINE_D3D_CONFIG=$WINE_D3D_CONFIG"
 log "NOTE renderer=no3d applies to WineD3D/DXGI adapter init; d3d12.dll still uses VKD3D/Vulkan"
 
-run_smoke_stage() {
-    stage=$1
-    limit=$2
-    log "--- smoke_stage=$stage timeout=${limit}s ---"
+run_smoke_stage_with_box64() {
+    variant=$1
+    box=$2
+    stage=$3
+    limit=$4
+    log "--- smoke_variant=$variant smoke_stage=$stage watchdog=${limit}s ---"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$box" 2>/dev/null || true
+    fi
+
     set +e
-    run_timeout "$limit" "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage"
+    "$box" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage" &
+    smoke_pid=$!
+    (
+        sleep "$limit"
+        if kill -0 "$smoke_pid" 2>/dev/null; then
+            log "SMOKE_WATCHDOG_FIRED variant=$variant stage=$stage pid=$smoke_pid"
+            "$box" "$WINESERVER" -k >/dev/null 2>&1 || true
+            kill -TERM "$smoke_pid" >/dev/null 2>&1 || true
+            sleep 1
+            kill -KILL "$smoke_pid" >/dev/null 2>&1 || true
+        fi
+    ) &
+    watchdog_pid=$!
+
+    wait "$smoke_pid"
     rc=$?
+    kill "$watchdog_pid" >/dev/null 2>&1 || true
+    wait "$watchdog_pid" >/dev/null 2>&1 || true
     set -e 2>/dev/null || true
-    log "SMOKE_STAGE_RESULT stage=$stage rc=$rc"
-    "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+
+    log "SMOKE_STAGE_RESULT variant=$variant stage=$stage rc=$rc"
+    "$box" "$WINESERVER" -k >/dev/null 2>&1 || true
     sleep 1
     mem
     return 0
 }
 
-run_smoke_stage load-dxgi 12
-run_smoke_stage load-d3d12 12
-run_smoke_stage factory 15
-run_smoke_stage device 20
-run_smoke_stage all 25
+log "--- Box64 A/B: v0.4.4 vs post-v0.4.4 main ---"
+run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" load-dxgi 12
+
+if [ -x "$BOX64_MAIN" ]; then
+    log "box64_main_candidate=$BOX64_MAIN"
+    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" load-dxgi 12
+    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" load-d3d12 12
+    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" factory 15
+    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" device 20
+    run_smoke_stage_with_box64 main-20260927 "$BOX64_MAIN" all 25
+else
+    log "WARN no Box64 main candidate; continuing with release binary"
+    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" load-d3d12 12
+    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" factory 15
+    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" device 20
+    run_smoke_stage_with_box64 release-v0.4.4 "$BOX64" all 25
+fi
 
 log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
 exit 0
