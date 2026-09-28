@@ -627,6 +627,39 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
           cat dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
 
+      - name: Build delta-only persistent Wine/X11 harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-persistent-x11/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-PERSISTENT-X11-DELTA.txt" <<'EOF'
+          Delta over the previous test15 Box64 A/B patch.
+
+          Only the field harness changed. No runtime binaries are replaced.
+
+          Changes:
+          - always discovers the known Totono/private-Xorg ARM64 library roots,
+            even when DISPLAY=:1 already exists
+          - exposes those roots to Wine LD_LIBRARY_PATH, not only to Xorg
+          - enables Mali wrapper DEBUG logging
+          - keeps one wineserver alive across all staged smoke tests
+          - watchdog kills only the stuck smoke process, avoiding repeated
+            wineboot/explorer initialization between stages
+          - prefix sanity is retried and no longer aborts all diagnostics if
+            cmd.exe is killed after the template prefix already initialized
+          - removes the now-disproven Box64 main A/B from the field sequence
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-persistent-x11 && zip -qr ../Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip > Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
@@ -640,6 +673,8 @@ jobs:
             dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
             dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
             dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
+            dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip
+            dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
           if-no-files-found: error
 
 
