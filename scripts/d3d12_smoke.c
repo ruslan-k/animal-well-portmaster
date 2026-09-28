@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 
 /*
  * Header-independent D3D12/DXGI bootstrap probe.
@@ -32,69 +33,130 @@ static void release_com(void *object)
         ((release_fn)vtbl[2])(object);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    const char *mode = argc > 1 ? argv[1] : "all";
     HMODULE dxgi = NULL, d3d12 = NULL;
-    pfn_CreateDXGIFactory1 create_factory;
-    pfn_D3D12CreateDevice create_device;
+    pfn_CreateDXGIFactory1 create_factory = NULL;
+    pfn_D3D12CreateDevice create_device = NULL;
     void *factory = NULL, *device = NULL;
     HRESULT hr;
 
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("ANIMAL WELL D3D12 bootstrap smoke\n");
+    printf("mode=%s\n", mode);
     printf("requested_feature_level=0x%04x (D3D_FEATURE_LEVEL_11_0)\n", 0xb000);
 
-    dxgi = LoadLibraryA("dxgi.dll");
-    if (!dxgi) {
-        printf("LoadLibrary(dxgi.dll) failed=%lu\n", (unsigned long)GetLastError());
-        return 10;
-    }
-    d3d12 = LoadLibraryA("d3d12.dll");
-    if (!d3d12) {
-        printf("LoadLibrary(d3d12.dll) failed=%lu\n", (unsigned long)GetLastError());
-        FreeLibrary(dxgi);
-        return 11;
-    }
-
-    create_factory = (pfn_CreateDXGIFactory1)(void *)
-        GetProcAddress(dxgi, "CreateDXGIFactory1");
-    create_device = (pfn_D3D12CreateDevice)(void *)
-        GetProcAddress(d3d12, "D3D12CreateDevice");
-    printf("CreateDXGIFactory1=%s\n", create_factory ? "present" : "missing");
-    printf("D3D12CreateDevice=%s\n", create_device ? "present" : "missing");
-    if (!create_factory || !create_device) {
-        FreeLibrary(d3d12);
-        FreeLibrary(dxgi);
-        return 12;
+    if (!strcmp(mode, "load-dxgi") || !strcmp(mode, "factory") || !strcmp(mode, "all"))
+    {
+        puts("STAGE_LOAD_DXGI_BEGIN");
+        dxgi = LoadLibraryA("dxgi.dll");
+        if (!dxgi)
+        {
+            printf("STAGE_LOAD_DXGI_FAIL error=%lu\n", (unsigned long)GetLastError());
+            return 10;
+        }
+        puts("STAGE_LOAD_DXGI_PASS");
+        if (!strcmp(mode, "load-dxgi"))
+        {
+            FreeLibrary(dxgi);
+            puts("SMOKE_RESULT=PASS_LOAD_DXGI");
+            return 0;
+        }
     }
 
-    puts("STAGE_DXGI_FACTORY_BEGIN");
-    hr = create_factory(&iid_idxgi_factory1, &factory);
-    printf("CreateDXGIFactory1 hr=0x%08lx ptr=%p\n",
-           (unsigned long)hr, factory);
-    if (FAILED(hr) || !factory) {
-        FreeLibrary(d3d12);
-        FreeLibrary(dxgi);
-        return 13;
+    if (!strcmp(mode, "load-d3d12") || !strcmp(mode, "device") || !strcmp(mode, "all"))
+    {
+        puts("STAGE_LOAD_D3D12_BEGIN");
+        d3d12 = LoadLibraryA("d3d12.dll");
+        if (!d3d12)
+        {
+            printf("STAGE_LOAD_D3D12_FAIL error=%lu\n", (unsigned long)GetLastError());
+            if (dxgi) FreeLibrary(dxgi);
+            return 11;
+        }
+        puts("STAGE_LOAD_D3D12_PASS");
+        if (!strcmp(mode, "load-d3d12"))
+        {
+            FreeLibrary(d3d12);
+            puts("SMOKE_RESULT=PASS_LOAD_D3D12");
+            return 0;
+        }
     }
 
-    puts("STAGE_DXGI_FACTORY_PASS");
-    puts("STAGE_D3D12_DEVICE_BEGIN");
-    hr = create_device(NULL, 0xb000, &iid_id3d12_device, &device);
-    printf("D3D12CreateDevice(NULL, FL11_0) hr=0x%08lx ptr=%p\n",
-           (unsigned long)hr, device);
-    if (FAILED(hr) || !device) {
-        release_com(factory);
-        FreeLibrary(d3d12);
-        FreeLibrary(dxgi);
-        return 14;
+    if (!strcmp(mode, "factory") || !strcmp(mode, "all"))
+    {
+        create_factory = (pfn_CreateDXGIFactory1)(void *)
+            GetProcAddress(dxgi, "CreateDXGIFactory1");
+        printf("CreateDXGIFactory1=%s\n", create_factory ? "present" : "missing");
+        if (!create_factory)
+        {
+            if (d3d12) FreeLibrary(d3d12);
+            if (dxgi) FreeLibrary(dxgi);
+            return 12;
+        }
+
+        puts("STAGE_DXGI_FACTORY_BEGIN");
+        hr = create_factory(&iid_idxgi_factory1, &factory);
+        printf("CreateDXGIFactory1 hr=0x%08lx ptr=%p\n",
+               (unsigned long)hr, factory);
+        if (FAILED(hr) || !factory)
+        {
+            if (d3d12) FreeLibrary(d3d12);
+            if (dxgi) FreeLibrary(dxgi);
+            return 13;
+        }
+        puts("STAGE_DXGI_FACTORY_PASS");
+
+        if (!strcmp(mode, "factory"))
+        {
+            release_com(factory);
+            FreeLibrary(dxgi);
+            puts("SMOKE_RESULT=PASS_DXGI_FACTORY");
+            return 0;
+        }
     }
 
-    puts("STAGE_D3D12_DEVICE_PASS");
-    release_com(device);
-    release_com(factory);
-    FreeLibrary(d3d12);
-    FreeLibrary(dxgi);
+    if (!strcmp(mode, "device") || !strcmp(mode, "all"))
+    {
+        create_device = (pfn_D3D12CreateDevice)(void *)
+            GetProcAddress(d3d12, "D3D12CreateDevice");
+        printf("D3D12CreateDevice=%s\n", create_device ? "present" : "missing");
+        if (!create_device)
+        {
+            if (factory) release_com(factory);
+            if (d3d12) FreeLibrary(d3d12);
+            if (dxgi) FreeLibrary(dxgi);
+            return 12;
+        }
+
+        puts("STAGE_D3D12_DEVICE_BEGIN");
+        hr = create_device(NULL, 0xb000, &iid_id3d12_device, &device);
+        printf("D3D12CreateDevice(NULL, FL11_0) hr=0x%08lx ptr=%p\n",
+               (unsigned long)hr, device);
+        if (FAILED(hr) || !device)
+        {
+            if (factory) release_com(factory);
+            if (d3d12) FreeLibrary(d3d12);
+            if (dxgi) FreeLibrary(dxgi);
+            return 14;
+        }
+        puts("STAGE_D3D12_DEVICE_PASS");
+
+        if (!strcmp(mode, "device"))
+        {
+            release_com(device);
+            FreeLibrary(d3d12);
+            puts("SMOKE_RESULT=PASS_D3D12_DEVICE");
+            return 0;
+        }
+    }
+
+    if (device) release_com(device);
+    if (factory) release_com(factory);
+    if (d3d12) FreeLibrary(d3d12);
+    if (dxgi) FreeLibrary(dxgi);
     puts("D3D12 bootstrap smoke: PASS");
     return 0;
 }
+
