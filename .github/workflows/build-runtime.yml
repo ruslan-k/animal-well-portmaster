@@ -1022,7 +1022,7 @@ jobs:
               '        }',
               '    }',
           ]
-          guard='\\n'.join(guard_lines)+'\\n\\n'
+          guard='\n'.join(guard_lines)+'\n\n'
           s=s[:pos]+guard+s[pos:]
           p.write_text(s)
           PY
