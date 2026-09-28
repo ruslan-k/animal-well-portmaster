@@ -687,6 +687,85 @@ jobs:
           if-no-files-found: error
 
 
+  build-test15-vkcreate-delta:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install minimal Focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates gcc libc6-dev file binutils zip unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Build updated x86-64 Vulkan create probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/vkcreate-probe
+          gcc -O2 -Wall -Wextra -o dist/vkcreate-probe/vulkan_ext_probe_x64 \
+            scripts/vulkan_ext_probe_x64.c -ldl
+          file dist/vkcreate-probe/vulkan_ext_probe_x64
+          file dist/vkcreate-probe/vulkan_ext_probe_x64 | grep -q 'x86-64'
+          bash scripts/check-abi.sh dist/vkcreate-probe 2>&1 | tee dist/vkcreate-probe/abi-report.txt
+          sh -n package/animalwell/test14-15-wsi.sh
+          grep -Fq 'harness_version=2026-09-28.18' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'VKCREATE_MATRIX' package/animalwell/test14-15-wsi.sh
+
+      - name: Package vkCreate field delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/vkcreate-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/vkcreate-probe/vulkan_ext_probe_x64 "$D/runtime/tools/vulkan_ext_probe_x64"
+          chmod +x "$D/runtime/tools/vulkan_ext_probe_x64"
+          cat >"$D/TEST15-VKCREATE-DELTA.txt" <<'EOF'
+          Delta over test15 wrapper-logoff .17.
+
+          Changed/new files only:
+          - test14-15-wsi.sh
+          - runtime/tools/vulkan_ext_probe_x64
+
+          Revision 2026-09-28.18:
+          - keeps MALI_WRAPPER_LOG_CATEGORY=off, proven by .17
+          - directly calls vkCreateInstance through Box64/native libvulkan before Wine
+          - tests minimal create-info via direct symbol and vkGetInstanceProcAddr
+          - tests the same five host instance extensions selected by WineVulkan:
+              VK_KHR_external_memory_capabilities
+              VK_KHR_external_semaphore_capabilities
+              VK_KHR_get_physical_device_properties2
+              VK_KHR_surface
+              VK_EXT_headless_surface
+          - if the Wine-like create succeeds, continues to Wine/D3D12
+          - if minimal create already fails, exits early at the raw Box64/Mali boundary
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/vkcreate-delta && zip -qr ../Animal-Well-TSPS-test15-VKCREATE-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-VKCREATE-DELTA.zip > Animal-Well-TSPS-test15-VKCREATE-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-VKCREATE-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-VKCREATE-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-vkcreate-delta
+          path: |
+            dist/Animal-Well-TSPS-test15-VKCREATE-DELTA.zip
+            dist/Animal-Well-TSPS-test15-VKCREATE-DELTA.sha256
+            dist/vkcreate-probe/abi-report.txt
+          if-no-files-found: error
+
+
   build-test13-direct-vkd3d:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
