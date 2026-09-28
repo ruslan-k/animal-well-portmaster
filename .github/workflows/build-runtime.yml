@@ -550,6 +550,78 @@ jobs:
           if-no-files-found: error
 
 
+  build-test15-vulkan-bridge-delta:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install minimal Focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates gcc libc6-dev file binutils zip
+
+      - uses: actions/checkout@v4
+
+      - name: Build x86-64 Vulkan bridge probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/vulkan-bridge-probe
+          gcc -O2 -Wall -Wextra -o dist/vulkan-bridge-probe/vulkan_ext_probe_x64 \
+            scripts/vulkan_ext_probe_x64.c -ldl
+          file dist/vulkan-bridge-probe/vulkan_ext_probe_x64
+          file dist/vulkan-bridge-probe/vulkan_ext_probe_x64 | grep -q 'x86-64'
+          bash scripts/check-abi.sh dist/vulkan-bridge-probe 2>&1 | tee dist/vulkan-bridge-probe/abi-report.txt
+
+      - name: Package latest field delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/vulkan-bridge-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/vulkan-bridge-probe/vulkan_ext_probe_x64 "$D/runtime/tools/vulkan_ext_probe_x64"
+          chmod +x "$D/runtime/tools/vulkan_ext_probe_x64"
+          cat >"$D/TEST15-VULKAN-BRIDGE-PROBE-DELTA.txt" <<'EOF'
+          Delta over the previous D3DKMT-WIN32U-HARNESSFIX diagnostic.
+
+          Changed/new files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.16
+            * runs x86-64 Vulkan bridge tests before Wine
+            * compares direct symbol vs vkGetInstanceProcAddr
+            * separates count-only vs fill calls
+            * retries with BOX64_NOVULKANOVERLAY=1 if the default bridge fails
+            * continues Wine automatically when the no-overlay workaround passes
+            * exits early instead of repeating the long Wine timeout when both fail
+          - runtime/tools/vulkan_ext_probe_x64
+            * tiny x86-64 Linux ELF built on Ubuntu 20.04 / glibc 2.31
+            * calls vkEnumerateInstanceExtensionProperties without Wine
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/vulkan-bridge-delta && zip -qr ../Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip > Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-vulkan-bridge-delta
+          path: |
+            dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip
+            dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256
+            dist/vulkan-bridge-probe/abi-report.txt
+          if-no-files-found: error
+
+
   build-test13-direct-vkd3d:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
