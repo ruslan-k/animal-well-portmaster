@@ -562,7 +562,7 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates gcc libc6-dev file binutils zip
+            ca-certificates gcc libc6-dev file binutils zip unzip
 
       - uses: actions/checkout@v4
 
