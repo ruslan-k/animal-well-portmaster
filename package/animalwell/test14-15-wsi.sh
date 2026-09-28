@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.12"
+log "harness_version=2026-09-28.13"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -340,6 +340,7 @@ run_smoke_stage() {
     limit=$3
     renderer=$4
     expected=$5
+    keep_server=${6:-0}
     stage_log="$LOGDIR/test15-${label}-$STAMP.stage.log"
     LAST_STAGE_PASS=0
 
@@ -376,24 +377,25 @@ run_smoke_stage() {
     fi
     log "SMOKE_STAGE_RESULT label=$label stage=$stage renderer=$renderer rc=$rc semantic=$semantic expected=$expected"
 
-    "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
-    sleep 1
+    if [ "$keep_server" -eq 1 ]; then
+        log "WINESESSION_KEEP_SERVER label=$label"
+    else
+        "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+        sleep 1
+    fi
     mem
     return 0
 }
 
-# Baseline with the real Mali wrapper. Previous physical runs hang while
-# win32u is refreshing the empty display cache and after libvulkan.so.1 loads.
+# Baseline with the real Mali wrapper.
 run_smoke_stage display-real-before display-kmt 12 no3d STAGE_ENUM_DISPLAY_PASS
 display_real_before_pass=$LAST_STAGE_PASS
 
-# A/B: populate Wine's display registry while both GPU discovery helpers are
-# deliberately unavailable. The previous physical run proved Vulkan failure is
-# handled quickly, then Wine stalls in get_opengl_gpus() after loading libEGL.
-# Shadow libEGL.so.1 and libGL.so.1 with invalid files so dlopen() fails fast,
-# allowing update_display_cache() to continue to XRandR/Xinerama topology.
+# Seed the display registry with GPU discovery disabled. The previous physical
+# run proved this path reaches \\.\DISPLAY1 + both D3DKMT opens in ~79s.
 REAL_VK_ICD_FILENAMES="$VK_ICD_FILENAMES"
 REAL_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+REAL_WINEDEBUG="$WINEDEBUG"
 NO_VULKAN_ICD="/tmp/animalwell-no-vulkan-icd-does-not-exist.json"
 NO_GL_DIR="/tmp/animalwell-no-opengl"
 rm -rf "$NO_GL_DIR"
@@ -403,63 +405,63 @@ mkdir -p "$NO_GL_DIR"
 
 export VK_ICD_FILENAMES="$NO_VULKAN_ICD"
 export LD_LIBRARY_PATH="$NO_GL_DIR:$REAL_LD_LIBRARY_PATH"
-REAL_WINEDEBUG="$WINEDEBUG"
 export WINEDEBUG=-all
-log "--- DISPLAY_SEED_NO_GPU_APIS begin ---"
-log "disabled_vulkan_icd=$VK_ICD_FILENAMES"
-log "shadow_gl_dir=$NO_GL_DIR"
-log "seed_winedebug=$WINEDEBUG"
-log "NOTE prior run proved nulldrv OpenGL lookup is progressing, not deadlocked; allow enough time without debug I/O"
+log "--- DISPLAY_SEED_KEEP_WINESERVER begin ---"
+log "NOTE successful seed will intentionally keep the same wineserver alive"
 
 seed_start=$(date +%s 2>/dev/null || echo 0)
-run_smoke_stage display-seed-no-gpu-quiet display-kmt 120 no3d STAGE_ENUM_DISPLAY_PASS
+run_smoke_stage display-seed-keep-server display-kmt 120 no3d SMOKE_RESULT=PASS_DISPLAY_KMT 1
 display_seed_pass=$LAST_STAGE_PASS
 seed_end=$(date +%s 2>/dev/null || echo 0)
 log "DISPLAY_SEED_NATIVE elapsed_s=$((seed_end-seed_start)) pass=$display_seed_pass"
 
-vdesktop_seed_pass=0
-if [ "$display_seed_pass" -ne 1 ]; then
-    log "native seed did not reach STAGE_ENUM_DISPLAY_PASS; trying virtual desktop with the same quiet nulldrv fallback"
-    vdesk_start=$(date +%s 2>/dev/null || echo 0)
-    run_smoke_stage vdesktop-seed-no-gpu-quiet vdesktop-display-kmt 150 no3d STAGE_VDESKTOP_CREATE_PASS
-    vdesktop_seed_pass=$LAST_STAGE_PASS
-    vdesk_end=$(date +%s 2>/dev/null || echo 0)
-    log "DISPLAY_SEED_VDESKTOP elapsed_s=$((vdesk_end-vdesk_start)) pass=$vdesktop_seed_pass"
-else
-    log "SKIP vdesktop seed because native EnumDisplayDevicesW already returned"
-fi
-
-# Restore actual GPU libraries/debugging and verify whether the display registry
-# written above survives a wineserver restart in the same prefix.
+# Restore the real GPU environment but DO NOT restart wineserver. A fresh Wine
+# client should first consume the display registry/monitor serial from the live
+# server; if that succeeds it should not need another GPU-discovery refresh.
 export WINEDEBUG="$REAL_WINEDEBUG"
 export VK_ICD_FILENAMES="$REAL_VK_ICD_FILENAMES"
 export LD_LIBRARY_PATH="$REAL_LD_LIBRARY_PATH"
 rm -rf "$NO_GL_DIR"
-log "--- DISPLAY_SEED_RESTORE_GPU_APIS VK_ICD_FILENAMES=$VK_ICD_FILENAMES ---"
-run_smoke_stage display-real-after-seed display-kmt 20 no3d STAGE_ENUM_DISPLAY_PASS
-display_real_after_pass=$LAST_STAGE_PASS
-log "DISPLAY_SEED_RESULT before=$display_real_before_pass seed=$display_seed_pass vdesktop_seed=$vdesktop_seed_pass after=$display_real_after_pass"
 
-if [ "$display_real_after_pass" -eq 1 ]; then
-    run_smoke_stage factory-after-seed-no3d factory 25 no3d SMOKE_RESULT=PASS_DXGI_FACTORY
+display_same_server_pass=0
+if [ "$display_seed_pass" -eq 1 ]; then
+    log "--- DISPLAY_REAL_SAME_WINESERVER begin ---"
+    run_smoke_stage display-real-same-server display-kmt 20 no3d SMOKE_RESULT=PASS_DISPLAY_KMT 1
+    display_same_server_pass=$LAST_STAGE_PASS
+else
+    log "SKIP same-server real-GPU test because seed did not pass"
+fi
+log "DISPLAY_SEED_RESULT before=$display_real_before_pass seed=$display_seed_pass same_server=$display_same_server_pass"
+
+if [ "$display_same_server_pass" -eq 1 ]; then
+    # Keep the seeded wineserver alive across the DXGI/D3D12 matrix as well.
+    run_smoke_stage factory-same-server-no3d factory 30 no3d SMOKE_RESULT=PASS_DXGI_FACTORY 1
     factory_no3d_pass=$LAST_STAGE_PASS
-    run_smoke_stage factory-after-seed-gl factory 30 gl SMOKE_RESULT=PASS_DXGI_FACTORY
-    factory_gl_pass=$LAST_STAGE_PASS
-    run_smoke_stage factory-after-seed-vulkan factory 35 vulkan SMOKE_RESULT=PASS_DXGI_FACTORY
-    factory_vulkan_pass=$LAST_STAGE_PASS
 
     if [ "$factory_no3d_pass" -eq 1 ]; then
-        run_smoke_stage device-after-seed-no3d device 40 no3d SMOKE_RESULT=PASS_D3D12_DEVICE
+        run_smoke_stage device-same-server-no3d device 45 no3d SMOKE_RESULT=PASS_D3D12_DEVICE 1
+        device_no3d_pass=$LAST_STAGE_PASS
+    else
+        device_no3d_pass=0
     fi
-    if [ "$factory_gl_pass" -eq 1 ]; then
-        run_smoke_stage device-after-seed-gl device 40 gl SMOKE_RESULT=PASS_D3D12_DEVICE
+
+    if [ "$factory_no3d_pass" -ne 1 ]; then
+        run_smoke_stage factory-same-server-gl factory 35 gl SMOKE_RESULT=PASS_DXGI_FACTORY 1
+        factory_gl_pass=$LAST_STAGE_PASS
+        if [ "$factory_gl_pass" -eq 1 ]; then
+            run_smoke_stage device-same-server-gl device 45 gl SMOKE_RESULT=PASS_D3D12_DEVICE 1
+        fi
     fi
-    if [ "$factory_vulkan_pass" -eq 1 ]; then
-        run_smoke_stage device-after-seed-vulkan device 45 vulkan SMOKE_RESULT=PASS_D3D12_DEVICE
-    fi
+
+    log "SAME_SERVER_DXGI_RESULT factory_no3d=$factory_no3d_pass device_no3d=$device_no3d_pass"
 else
-    log "SKIP post-seed DXGI factory/device matrix because real-GPU EnumDisplayDevicesW still did not return"
+    log "SKIP same-server DXGI/D3D12 because display topology was not reusable"
 fi
+
+# Final cleanup only after all same-session probes are complete.
+"$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+sleep 1
+mem
 
 log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
 exit 0
