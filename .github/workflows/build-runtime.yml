@@ -607,12 +607,16 @@ jobs:
           export PKG_CONFIG_PATH="$pc"
           gcc -O2 -Wall -Wextra -o dist/test13/vkd3d_direct_probe \
             scripts/vkd3d_direct_probe.c $(pkg-config --cflags --libs libvkd3d)
+          gcc -O2 -Wall -Wextra -o dist/test13/vulkan_ext_probe_x64 \
+            scripts/vulkan_ext_probe_x64.c -ldl
           cp -a /opt/vkd3d/lib*/libvkd3d.so* dist/test13/lib/ 2>/dev/null || true
           cp -a /opt/vkd3d/lib*/libvkd3d-shader.so* dist/test13/lib/ 2>/dev/null || true
           cp -a /opt/vkd3d/lib*/libvkd3d-utils.so* dist/test13/lib/ 2>/dev/null || true
           test -x dist/test13/vkd3d_direct_probe
+          test -x dist/test13/vulkan_ext_probe_x64
           test -e dist/test13/lib/libvkd3d.so.1
-          file dist/test13/vkd3d_direct_probe dist/test13/lib/*.so*
+          file dist/test13/vkd3d_direct_probe dist/test13/vulkan_ext_probe_x64 dist/test13/lib/*.so*
+          file dist/test13/vulkan_ext_probe_x64 | grep -q 'x86-64'
           ldd dist/test13/vkd3d_direct_probe | tee dist/test13/ldd.txt
           readelf -d dist/test13/vkd3d_direct_probe > dist/test13/readelf.txt
           printf 'vkd3d=2.1\nmode=direct-no-wine-no-dxgi-no-wsi\nbuild_glibc=2.31\n' > dist/test13/MANIFEST.txt
