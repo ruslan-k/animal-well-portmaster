@@ -40,6 +40,7 @@ int main(void)
     void *factory = NULL, *device = NULL;
     HRESULT hr;
 
+    setvbuf(stdout, NULL, _IONBF, 0);
     printf("ANIMAL WELL D3D12 bootstrap smoke\n");
     printf("requested_feature_level=0x%04x (D3D_FEATURE_LEVEL_11_0)\n", 0xb000);
 
@@ -67,6 +68,7 @@ int main(void)
         return 12;
     }
 
+    puts("STAGE_DXGI_FACTORY_BEGIN");
     hr = create_factory(&iid_idxgi_factory1, &factory);
     printf("CreateDXGIFactory1 hr=0x%08lx ptr=%p\n",
            (unsigned long)hr, factory);
@@ -76,6 +78,8 @@ int main(void)
         return 13;
     }
 
+    puts("STAGE_DXGI_FACTORY_PASS");
+    puts("STAGE_D3D12_DEVICE_BEGIN");
     hr = create_device(NULL, 0xb000, &iid_id3d12_device, &device);
     printf("D3D12CreateDevice(NULL, FL11_0) hr=0x%08lx ptr=%p\n",
            (unsigned long)hr, device);
@@ -86,6 +90,7 @@ int main(void)
         return 14;
     }
 
+    puts("STAGE_D3D12_DEVICE_PASS");
     release_com(device);
     release_com(factory);
     FreeLibrary(d3d12);
