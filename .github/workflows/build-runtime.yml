@@ -294,6 +294,39 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256
 
+      - name: Build delta-only test15 GPU-less display seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-display-seed-nogpu-delta/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-DISPLAY-SEED-NOGPU-DELTA.txt" <<'EOF'
+          Delta over the previous DISPLAY-SEED diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.11
+            * adds +wgl tracing
+            * disables Vulkan ICD during the seed phase
+            * shadows libEGL.so.1 and libGL.so.1 with invalid files at the
+              front of LD_LIBRARY_PATH so Wine OpenGL GPU discovery fails fast
+            * retries native and virtual-desktop display-cache population
+            * restores the real Mali Vulkan/OpenGL paths and verifies whether
+              \\.\DISPLAY1 persists in the same prefix
+            * only retries DXGI/D3D12 if real-GPU display enumeration succeeds
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-display-seed-nogpu-delta && zip -qr ../Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip > Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -323,6 +356,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
             dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip
             dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256
           if-no-files-found: error
 
 
