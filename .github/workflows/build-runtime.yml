@@ -1262,7 +1262,7 @@ jobs:
           cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
           chmod +x "$D/test14-15-wsi.sh"
           cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
-          strings "$D/runtime/test14/lib/libmali_wrapper.so" | grep -Fq 'AW_GIPA_GUARD_BLOCK'
+          grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
           cat >"$D/TEST15-MALI-GIPA-GUARD-DELTA.txt" <<'EOF'
           Delta over test15 post-create .19.
 
