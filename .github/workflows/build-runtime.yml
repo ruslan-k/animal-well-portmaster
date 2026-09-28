@@ -641,3 +641,93 @@ jobs:
             dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
             dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
           if-no-files-found: error
+
+
+  build-test15-box64-main:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      BOX64_TEST15_REF: c61543e47b8a9d1720742186bfea205ad8a7ed35
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install Focal build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends             ca-certificates git make python3 python3-pip             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu             file zip unzip
+          python3 -m pip install --no-cache-dir 'cmake==3.27.9'
+
+      - uses: actions/checkout@v4
+
+      - name: Build pinned post-v0.4.4 Box64 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/ptitSeb/box64.git /tmp/box64-main
+          git -C /tmp/box64-main checkout -q "$BOX64_TEST15_REF"
+          cat >/tmp/box64-toolchain.cmake <<'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+          set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+          EOF
+          /usr/local/bin/cmake -S /tmp/box64-main -B /tmp/box64-main-build             -DCMAKE_TOOLCHAIN_FILE=/tmp/box64-toolchain.cmake             -DARM64=1 -DBOX32=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          /usr/local/bin/cmake --build /tmp/box64-main-build -j4
+          mkdir -p dist/test15-box64-main
+          cp /tmp/box64-main-build/box64 dist/test15-box64-main/box64-test15-main
+          aarch64-linux-gnu-strip dist/test15-box64-main/box64-test15-main
+          file dist/test15-box64-main/box64-test15-main
+          strings dist/test15-box64-main/box64-test15-main | grep -F 'BOX64_MMAP32' | head -1 || true
+
+      - name: Validate Box64 candidate ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-abi.sh dist/test15-box64-main 2>&1 | tee dist/test15-box64-main/abi-report.txt
+          aarch64-linux-gnu-readelf --version-info dist/test15-box64-main/box64-test15-main             > dist/test15-box64-main/version-info.txt 2>&1 || true
+
+      - name: Build delta-only Box64 A/B patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-box64-main-delta/animalwell
+          mkdir -p "$D/runtime/box64"
+          cp dist/test15-box64-main/box64-test15-main "$D/runtime/box64/box64-test15-main"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh" "$D/runtime/box64/box64-test15-main"
+          cat >"$D/TEST15-BOX64-MAIN-DELTA.txt" <<'EOF'
+          Delta over the previous test15 staged diagnostics.
+
+          Adds a separate Box64 candidate built from:
+            c61543e47b8a9d1720742186bfea205ad8a7ed35
+          (post-v0.4.4 main, 2026-09-27)
+
+          Production runtime/box64/box64 is NOT replaced.
+
+          Relevant upstream changes after v0.4.4 include:
+          - #4303: do not allocate bridge bricks in guest low memory for 64-bit guests
+          - #4377: limit MAP_NORESERVE length on 39-bit platforms
+          - #4394: fix race between concurrent mmaps overwriting guest mappings
+
+          The harness first probes load-dxgi with release v0.4.4, then with the
+          candidate, using an explicit watchdog. If the candidate gets past
+          load-dxgi, it continues load-d3d12/factory/device/all with the candidate.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-box64-main-delta && zip -qr ../Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip > Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-box64-main
+          path: |
+            dist/test15-box64-main
+            dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip
+            dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.sha256
+          if-no-files-found: error
