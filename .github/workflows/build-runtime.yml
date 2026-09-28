@@ -133,6 +133,34 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-PREFIX-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-PREFIX-DELTA.sha256
 
+      - name: Build delta-only test15 no3d diagnostic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-no3d-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-NO3D-DELTA.txt" <<'EOF'
+          Delta over the previous test15 prefix patch.
+
+          Changed files only:
+          - test14-15-wsi.sh: test15 now sets WINE_D3D_CONFIG=renderer=no3d
+            so DXGI/WineD3D does not initialise its Vulkan renderer.
+            Wine d3d12.dll still uses VKD3D/Vulkan independently.
+          - runtime/tools/d3d12_smoke.exe: unbuffered stage markers:
+              STAGE_DXGI_FACTORY_BEGIN/PASS
+              STAGE_D3D12_DEVICE_BEGIN/PASS
+
+          Re-run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-no3d-delta && zip -qr ../Animal-Well-TSPS-test15-NO3D-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-NO3D-DELTA.zip > Animal-Well-TSPS-test15-NO3D-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-NO3D-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -152,6 +180,8 @@ jobs:
             dist/prefix-sanity.log
             dist/Animal-Well-TSPS-test15-PREFIX-DELTA.zip
             dist/Animal-Well-TSPS-test15-PREFIX-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-NO3D-DELTA.zip
+            dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
           if-no-files-found: error
 
 
