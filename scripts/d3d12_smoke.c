@@ -6,6 +6,9 @@
 #ifndef DF_WINE_VIRTUAL_DESKTOP
 #define DF_WINE_VIRTUAL_DESKTOP 0x80000000u
 #endif
+#ifndef DESKTOP_ALL_ACCESS
+#define DESKTOP_ALL_ACCESS 0x000F01FFu
+#endif
 
 /*
  * Header-independent D3D12/DXGI bootstrap probe.
@@ -226,7 +229,6 @@ static int probe_display_kmt(void)
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "all";
-    int vdesktop = 0;
     int desktop_rc;
     HMODULE dxgi = NULL, d3d12 = NULL;
     pfn_CreateDXGIFactory1 create_factory = NULL;
@@ -241,7 +243,6 @@ int main(int argc, char **argv)
 
     if (!strncmp(mode, "vdesktop-", 9))
     {
-        vdesktop = 1;
         mode += 9;
         printf("effective_mode=%s virtual_desktop=1\n", mode);
         desktop_rc = enter_virtual_desktop();
