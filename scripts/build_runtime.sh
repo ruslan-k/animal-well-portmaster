@@ -14,7 +14,7 @@ cp -a "$ROOT/package" "$WORK/package"
 RT="$WORK/package/animalwell/runtime"
 mkdir -p "$RT/box64" "$RT/wine" "$RT/backends" "$RT/tools"
 
-for x in git cmake curl tar xz python3 aarch64-linux-gnu-gcc x86_64-w64-mingw32-gcc readelf file; do
+for x in git cmake curl tar xz python3 gcc aarch64-linux-gnu-gcc x86_64-w64-mingw32-gcc readelf file; do
   command -v "$x" >/dev/null || { echo "missing $x" >&2; exit 2; }
 done
 
@@ -48,6 +48,7 @@ copy_focal_x64_lib libunwind.so.8
 
 # Probes.
 aarch64-linux-gnu-gcc -O2 -Wall -Wextra -o "$RT/tools/vkprobe" "$ROOT/scripts/vkprobe.c" -ldl
+gcc -O2 -Wall -Wextra -o "$RT/tools/vulkan_ext_probe_x64" "$ROOT/scripts/vulkan_ext_probe_x64.c" -ldl
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o "$RT/tools/d3d12_smoke.exe" "$ROOT/scripts/d3d12_smoke.c"
 
 # Portable x86-64 WOW64 Wine.
@@ -141,7 +142,7 @@ fetch_vkd3d 2.6
 fetch_vkd3d 3.0.1
 
 chmod +x "$WORK/package/Animal Well.sh" "$WORK/package/Animal Well Diagnose.sh" \
-  "$WORK/package/animalwell/diagnose.sh" "$RT/box64/box64" "$RT/tools/vkprobe"
+  "$WORK/package/animalwell/diagnose.sh" "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/vulkan_ext_probe_x64"
 
 printf 'box64_ref=%s\nwine=%s\nvkd3d=2.6,3.0.1\nglibc_ceiling=2.31\nglibcxx_ceiling=3.4.28\nprefix_layout=tmp-symlink-prefix-v1\n' \
   "$BOX64_REF" "$WINE_VER" >"$RT/BUILD-MANIFEST.txt"
