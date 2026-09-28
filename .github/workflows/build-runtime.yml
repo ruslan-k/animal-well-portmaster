@@ -193,6 +193,39 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-STAGED-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
 
+      - name: Build delta-only test15 display/KMT renderer matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-display-kmt-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-DISPLAY-KMT-DELTA.txt" <<'EOF'
+          Delta over the previous PERSISTENT-X11 diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * fixes Mali wrapper debug category to wrapper+wsi+low-address-map
+            * resets wineserver between probes after watchdog termination
+            * adds renderer matrix: no3d, gl, vulkan
+            * enables Wine d3d/x11drv tracing
+            * conditionally tests D3D12CreateDevice only after a factory passes
+          - runtime/tools/d3d12_smoke.exe
+            * adds display-kmt mode
+            * probes EnumDisplayDevicesW
+            * probes D3DKMTOpenAdapterFromGdiDisplayName
+            * probes D3DKMTOpenAdapterFromLuid
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-display-kmt-delta && zip -qr ../Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip > Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
+
       - name: Verify game-free artifact
         run: |
           ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
@@ -216,6 +249,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
             dist/Animal-Well-TSPS-test15-STAGED-DELTA.zip
             dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip
+            dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
           if-no-files-found: error
 
 
