@@ -622,6 +622,71 @@ jobs:
           if-no-files-found: error
 
 
+  build-test15-wrapper-logoff-delta:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    steps:
+      - name: Install minimal packaging dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends zip unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Validate harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n package/animalwell/test14-15-wsi.sh
+          grep -Fq 'harness_version=2026-09-28.17' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'MALI_WRAPPER_LOG_CATEGORY="$log_category"' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'MALI_WRAPPER_WORKAROUND=MALI_WRAPPER_LOG_CATEGORY=off' package/animalwell/test14-15-wsi.sh
+
+      - name: Package script-only field delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/wrapper-logoff-delta/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-WRAPPER-LOGOFF-DELTA.txt" <<'EOF'
+          Delta over test15 Vulkan-bridge-probe .16.
+
+          Changed file only:
+          - test14-15-wsi.sh
+
+          Revision 2026-09-28.17:
+          - disables mali-wrapper C++ logging before the Box64/native Vulkan bridge
+          - avoids Logger::Log() stringstream/std::cout after .16 proved the crash
+            lands in libstdc++ std::ostream::sentry
+          - retries with BOX64_NOVULKANOVERLAY=1 only if log-off alone still fails
+          - if the bridge passes, preserves MALI_WRAPPER_LOG_CATEGORY=off for Wine
+            and continues to the existing display/D3DKMT/DXGI/D3D12 stages
+
+          Prerequisite:
+          - the previous .16 delta is already installed, including
+            runtime/tools/vulkan_ext_probe_x64
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/wrapper-logoff-delta && zip -qr ../Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-wrapper-logoff-delta
+          path: |
+            dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip
+            dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.sha256
+          if-no-files-found: error
+
+
   build-test13-direct-vkd3d:
     runs-on: ubuntu-latest
     container: ubuntu:20.04
