@@ -244,7 +244,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.9"
+log "harness_version=2026-09-28.10"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -299,7 +299,7 @@ export WINE_D3D_CONFIG=renderer=no3d
 export VKD3D_CONFIG=virtual_heaps
 export VKD3D_DEBUG=info
 export VKD3D_LOG_FILE="$LOGDIR/test15-vkd3d-$STAMP.log"
-export WINEDEBUG=+timestamp,+dxgi,+d3d,+wined3d,+vulkan,+x11drv
+export WINEDEBUG=+timestamp,+dxgi,+d3d,+wined3d,+vulkan,+x11drv,+xrandr,+system,+d3dkmt
 
 log "--- prefix sanity ---"
 prefix_ok=0
@@ -382,43 +382,56 @@ run_smoke_stage() {
     return 0
 }
 
-# Keep one short native baseline. This is expected to expose the existing zero-display condition.
-run_smoke_stage display-native display-kmt 12 no3d SMOKE_RESULT=PASS_DISPLAY_KMT
+# Baseline with the real Mali wrapper. Previous physical runs hang while
+# win32u is refreshing the empty display cache and after libvulkan.so.1 loads.
+run_smoke_stage display-real-before display-kmt 12 no3d STAGE_ENUM_DISPLAY_PASS
+display_real_before_pass=$LAST_STAGE_PASS
 
-# The important A/B: enter a Wine virtual desktop before asking Win32 for displays.
-run_smoke_stage display-vdesktop vdesktop-display-kmt 25 no3d SMOKE_RESULT=PASS_DISPLAY_KMT
-vdesktop_display_pass=$LAST_STAGE_PASS
+# A/B: populate Wine's display registry while Vulkan device discovery is
+# deliberately unavailable. update_display_cache(TRUE/FALSE) is allowed to
+# continue with X11/XRandR/Xinerama even when get_vulkan_gpus() fails.
+REAL_VK_ICD_FILENAMES="$VK_ICD_FILENAMES"
+NO_VULKAN_ICD="/tmp/animalwell-no-vulkan-icd-does-not-exist.json"
+export VK_ICD_FILENAMES="$NO_VULKAN_ICD"
+log "--- DISPLAY_SEED_NO_VULKAN begin real_icd=$REAL_VK_ICD_FILENAMES disabled_icd=$VK_ICD_FILENAMES ---"
+run_smoke_stage display-seed-no-vulkan display-kmt 20 no3d STAGE_ENUM_DISPLAY_PASS
+display_seed_pass=$LAST_STAGE_PASS
 
-if [ "$vdesktop_display_pass" -eq 1 ]; then
-    run_smoke_stage factory-vdesktop-no3d vdesktop-factory 25 no3d SMOKE_RESULT=PASS_DXGI_FACTORY
+# Also try the virtual-desktop force-refresh path with Vulkan disabled. This
+# tells us whether CreateDesktopW itself was blocked specifically by Vulkan GPU
+# enumeration in the previous test.
+run_smoke_stage vdesktop-seed-no-vulkan vdesktop-display-kmt 25 no3d STAGE_VDESKTOP_CREATE_PASS
+vdesktop_seed_pass=$LAST_STAGE_PASS
+
+# Restore the actual Mali wrapper, restart Wine (run_smoke_stage does this), and
+# verify whether the same prefix now has a persistent \\.\DISPLAY1 topology.
+export VK_ICD_FILENAMES="$REAL_VK_ICD_FILENAMES"
+log "--- DISPLAY_SEED_RESTORE_REAL_VULKAN VK_ICD_FILENAMES=$VK_ICD_FILENAMES ---"
+run_smoke_stage display-real-after-seed display-kmt 20 no3d STAGE_ENUM_DISPLAY_PASS
+display_real_after_pass=$LAST_STAGE_PASS
+log "DISPLAY_SEED_RESULT before=$display_real_before_pass seed=$display_seed_pass vdesktop_seed=$vdesktop_seed_pass after=$display_real_after_pass"
+
+if [ "$display_real_after_pass" -eq 1 ]; then
+    # Once display enumeration is proven, retry the renderer matrix. A probe is
+    # counted as factory-pass only when CreateDXGIFactory1 actually returns.
+    run_smoke_stage factory-after-seed-no3d factory 25 no3d SMOKE_RESULT=PASS_DXGI_FACTORY
     factory_no3d_pass=$LAST_STAGE_PASS
-
-    run_smoke_stage factory-vdesktop-gl vdesktop-factory 30 gl SMOKE_RESULT=PASS_DXGI_FACTORY
+    run_smoke_stage factory-after-seed-gl factory 30 gl SMOKE_RESULT=PASS_DXGI_FACTORY
     factory_gl_pass=$LAST_STAGE_PASS
-
-    run_smoke_stage factory-vdesktop-vulkan vdesktop-factory 35 vulkan SMOKE_RESULT=PASS_DXGI_FACTORY
+    run_smoke_stage factory-after-seed-vulkan factory 35 vulkan SMOKE_RESULT=PASS_DXGI_FACTORY
     factory_vulkan_pass=$LAST_STAGE_PASS
 
     if [ "$factory_no3d_pass" -eq 1 ]; then
-        run_smoke_stage device-vdesktop-no3d vdesktop-device 35 no3d SMOKE_RESULT=PASS_D3D12_DEVICE
-        device_no3d_pass=$LAST_STAGE_PASS
-        if [ "$device_no3d_pass" -eq 1 ]; then
-            run_smoke_stage all-vdesktop-no3d vdesktop-all 45 no3d "D3D12 bootstrap smoke: PASS"
-        fi
+        run_smoke_stage device-after-seed-no3d device 40 no3d SMOKE_RESULT=PASS_D3D12_DEVICE
     fi
     if [ "$factory_gl_pass" -eq 1 ]; then
-        run_smoke_stage device-vdesktop-gl vdesktop-device 40 gl SMOKE_RESULT=PASS_D3D12_DEVICE
+        run_smoke_stage device-after-seed-gl device 40 gl SMOKE_RESULT=PASS_D3D12_DEVICE
     fi
     if [ "$factory_vulkan_pass" -eq 1 ]; then
-        run_smoke_stage device-vdesktop-vulkan vdesktop-device 45 vulkan SMOKE_RESULT=PASS_D3D12_DEVICE
-        device_vulkan_pass=$LAST_STAGE_PASS
-        if [ "$device_vulkan_pass" -eq 1 ]; then
-            run_smoke_stage all-vdesktop-vulkan vdesktop-all 55 vulkan "D3D12 bootstrap smoke: PASS"
-        fi
+        run_smoke_stage device-after-seed-vulkan device 45 vulkan SMOKE_RESULT=PASS_D3D12_DEVICE
     fi
 else
-    log "VDESKTOP_RESULT=FAIL_NO_WINDOWS_DISPLAY"
-    log "SKIP virtual-desktop DXGI factory/device matrix because display-kmt did not pass"
+    log "SKIP post-seed DXGI factory/device matrix because real-Vulkan EnumDisplayDevicesW still did not return"
 fi
 
 log "TEST15_RESULT=DIAGNOSTIC_COMPLETE"
