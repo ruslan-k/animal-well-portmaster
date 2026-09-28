@@ -326,12 +326,13 @@ run_vkext_stage() {
     label=$1
     mode=$2
     limit=$3
+    no_overlay=${4:-0}
     stage_log="$LOGDIR/test15-vkext-$label-$STAMP.stage.log"
     LAST_VKEXT_PASS=0
-    log "--- vkext_label=$label mode=$mode watchdog=${limit}s ---"
+    log "--- vkext_label=$label mode=$mode no_overlay=$no_overlay watchdog=${limit}s ---"
     rm -f "$stage_log" 2>/dev/null || true
     set +e
-    run_timeout "$limit" env BOX64_LOG=1 "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
+    run_timeout "$limit" env BOX64_LOG=1 BOX64_NOVULKANOVERLAY="$no_overlay" "$BOX64" "$VKEXT" "$mode" >"$stage_log" 2>&1
     rc=$?
     set -e 2>/dev/null || true
     cat "$stage_log" 2>/dev/null || true
@@ -341,36 +342,52 @@ run_vkext_stage() {
     else
         semantic=FAIL
     fi
-    log "VKEXT_STAGE_RESULT label=$label mode=$mode rc=$rc semantic=$semantic"
+    log "VKEXT_STAGE_RESULT label=$label mode=$mode no_overlay=$no_overlay rc=$rc semantic=$semantic"
     return 0
 }
 
-vkext_direct_count_pass=0
-vkext_direct_fill_pass=0
-vkext_gipa_count_pass=0
-vkext_gipa_fill_pass=0
+run_vkext_matrix() {
+    matrix_name=$1
+    no_overlay=$2
+    vkext_direct_count_pass=0
+    vkext_direct_fill_pass=0
+    vkext_gipa_count_pass=0
+    vkext_gipa_fill_pass=0
+
+    run_vkext_stage "$matrix_name-direct-count" direct-count 10 "$no_overlay"
+    vkext_direct_count_pass=$LAST_VKEXT_PASS
+    run_vkext_stage "$matrix_name-direct-fill" direct-fill 10 "$no_overlay"
+    vkext_direct_fill_pass=$LAST_VKEXT_PASS
+    run_vkext_stage "$matrix_name-gipa-count" gipa-count 10 "$no_overlay"
+    vkext_gipa_count_pass=$LAST_VKEXT_PASS
+    run_vkext_stage "$matrix_name-gipa-fill" gipa-fill 10 "$no_overlay"
+    vkext_gipa_fill_pass=$LAST_VKEXT_PASS
+    log "VKEXT_MATRIX name=$matrix_name no_overlay=$no_overlay direct_count=$vkext_direct_count_pass direct_fill=$vkext_direct_fill_pass gipa_count=$vkext_gipa_count_pass gipa_fill=$vkext_gipa_fill_pass"
+
+    [ "$vkext_direct_count_pass" -eq 1 ] && [ "$vkext_direct_fill_pass" -eq 1 ] && \
+    [ "$vkext_gipa_count_pass" -eq 1 ] && [ "$vkext_gipa_fill_pass" -eq 1 ]
+}
+
 if [ -x "$VKEXT" ]; then
     log "--- Box64/native Vulkan extension bridge matrix ---"
-    run_vkext_stage direct-count direct-count 10
-    vkext_direct_count_pass=$LAST_VKEXT_PASS
-    run_vkext_stage direct-fill direct-fill 10
-    vkext_direct_fill_pass=$LAST_VKEXT_PASS
-    run_vkext_stage gipa-count gipa-count 10
-    vkext_gipa_count_pass=$LAST_VKEXT_PASS
-    run_vkext_stage gipa-fill gipa-fill 10
-    vkext_gipa_fill_pass=$LAST_VKEXT_PASS
-    log "VKEXT_MATRIX direct_count=$vkext_direct_count_pass direct_fill=$vkext_direct_fill_pass gipa_count=$vkext_gipa_count_pass gipa_fill=$vkext_gipa_fill_pass"
-
-    if [ "$vkext_direct_count_pass" -ne 1 ] || [ "$vkext_direct_fill_pass" -ne 1 ] || \
-       [ "$vkext_gipa_count_pass" -ne 1 ] || [ "$vkext_gipa_fill_pass" -ne 1 ]; then
-        log "TEST15_RESULT=BOX64_VULKAN_BRIDGE_BLOCKER"
-        exit 0
+    if run_vkext_matrix default 0; then
+        log "BOX64_VULKAN_BRIDGE_RESULT=PASS_DEFAULT"
+    else
+        log "BOX64_VULKAN_BRIDGE_DEFAULT=FAIL; retrying with BOX64_NOVULKANOVERLAY=1"
+        if run_vkext_matrix no-overlay 1; then
+            export BOX64_NOVULKANOVERLAY=1
+            log "BOX64_VULKAN_BRIDGE_RESULT=PASS_NOVULKANOVERLAY"
+            log "BOX64_VULKAN_WORKAROUND=BOX64_NOVULKANOVERLAY=1"
+        else
+            log "BOX64_VULKAN_BRIDGE_RESULT=FAIL"
+            log "TEST15_RESULT=BOX64_VULKAN_BRIDGE_BLOCKER"
+            exit 0
+        fi
     fi
 else
     log "ERROR missing x64 Vulkan bridge probe: $VKEXT"
     exit 35
 fi
-
 log "--- prefix sanity ---"
 prefix_ok=0
 attempt=1
