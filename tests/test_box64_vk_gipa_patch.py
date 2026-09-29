@@ -21,6 +21,16 @@ class Box64GipaPatchTests(unittest.TestCase):
         self.assertIn('strcmp(rname, "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM") == 0', result)
         self.assertIn('strcmp(rname, "vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM") == 0', result)
         self.assertIn('strcmp(rname, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR") == 0', result)
+        for name in (
+            "vkGetPhysicalDeviceExternalTensorPropertiesARM",
+            "vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM",
+            "vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM",
+            "vkGetPhysicalDeviceOpticalFlowImageFormatsNV",
+            "vkGetPhysicalDeviceCooperativeVectorPropertiesNV",
+            "vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV",
+            "vkGetPhysicalDeviceCooperativeMatrixPropertiesNV",
+        ):
+            self.assertIn(f'strcmp(rname, "{name}") == 0', result)
         self.assertLess(result.index("BOX64_VULKAN_GIPA_BLOCK"), result.index("getprocaddr ="))
         self.assertIn('return NULL;', result)
 

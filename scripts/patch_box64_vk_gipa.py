@@ -12,6 +12,13 @@ GUARD = '''    const char* rname = (const char*)name;
     if (skip_unsafe_gipa && strcmp(skip_unsafe_gipa, "1") == 0 && rname &&
         (strcmp(rname, "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM") == 0 ||
          strcmp(rname, "vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceExternalTensorPropertiesARM") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceOpticalFlowImageFormatsNV") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceCooperativeVectorPropertiesNV") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceCooperativeMatrixPropertiesNV") == 0 ||
          strcmp(rname, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR") == 0)) {
         fprintf(stderr, "BOX64_VULKAN_GIPA_BLOCK name=%s\\n", rname);
         return NULL;
