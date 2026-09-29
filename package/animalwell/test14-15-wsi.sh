@@ -223,17 +223,25 @@ EOF
     export MALI_WRAPPER_LOG_LEVEL=3
     export MALI_WRAPPER_LOG_CATEGORY=wrapper+wsi+low-address-map
     export MALI_WRAPPER_LOG_COLORS=0
-    # TSPS loader pick: the bundled 1.2.x Vulkan loaders (deps 1.2.131,
-    # xorg-libs 1.2.162) crash inside loader_check_icds_for_phys_dev_ext_address
-    # when an app/probe queries entry points newer than their own tables.
-    # Prefer the firmware loader, which resolves every probed name.
-    if [ -e /usr/lib/libvulkan.so.1 ]; then
-        mkdir -p /tmp/animalwell-loader
-        ln -sf /usr/lib/libvulkan.so.1 /tmp/animalwell-loader/libvulkan.so.1
-        LOADER_PICK=/tmp/animalwell-loader
-    else
-        LOADER_PICK=
-    fi
+    # TSPS loader pick: prefer the port-bundled 1.2.131 loader (deps/), which
+    # exposes the X11 WSI extensions (VK_KHR_xcb/xlib_surface) required by
+    # Wine's win32_surface mapping. The firmware loader (1.3.296) was built
+    # without X11 WSI and filters them out, which broke vkd3d instance
+    # creation. The wrapper exports vk_icdGetPhysicalDeviceProcAddr, so the
+    # 1.2.x loaders no longer crash in
+    # loader_check_icds_for_phys_dev_ext_address on unknown-name probes.
+    LOADER_PICK=
+    for cand in "$T14/deps/libvulkan.so.1" \
+        /mnt/UDISK/xorg-libs/usr/lib/aarch64-linux-gnu/libvulkan.so.1 \
+        /usr/lib/libvulkan.so.1; do
+        if [ -e "$cand" ]; then
+            mkdir -p /tmp/animalwell-loader
+            ln -sf "$cand" /tmp/animalwell-loader/libvulkan.so.1
+            LOADER_PICK=/tmp/animalwell-loader
+            log "loader_source=$cand"
+            break
+        fi
+    done
     log "loader_pick=${LOADER_PICK:-<bundled>}"
     export LD_LIBRARY_PATH="${LOADER_PICK:+$LOADER_PICK:}$T14/deps:$T14/lib:$MALIDIR${XORG_LD_PATH:+:$XORG_LD_PATH}:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     log "real_mali=$mali"
@@ -257,7 +265,7 @@ setup_prefix() {
 }
 
 log "=== ANIMAL WELL ${MODE} ==="
-log "harness_version=2026-09-28.20"
+log "harness_version=2026-09-29.21"
 log "uname=$(uname -a 2>/dev/null || true)"
 mem
 ensure_display || exit 20
@@ -278,6 +286,12 @@ if strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -Fq 'AW_GIPA_GUARD_B
 else
     log "ERROR wrapper_gipa_guard_marker=missing (install .20 wrapper delta)"
     exit 23
+fi
+if strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -Fq 'vk_icdGetPhysicalDeviceProcAddr'; then
+    log "wrapper_phydev_proc_addr_marker=present"
+else
+    log "ERROR wrapper_phydev_proc_addr_marker=missing (install the WRAPPER-PHYDEV-EXPORT delta)"
+    exit 24
 fi
 strings "$T14/lib/libmali_wrapper.so" 2>/dev/null | grep -E 'libmali\.so|Mali Wrapper|WSI_X11_FORCE_SHM' | head -40 || true
 

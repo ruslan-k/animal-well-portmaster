@@ -1026,6 +1026,31 @@ jobs:
           s=s[:pos]+guard+s[pos:]
           p.write_text(s)
 
+          # ICD interface version 5 requires vk_icdGetPhysicalDeviceProcAddr, but
+          # the upstream wrapper never exported it. The bundled TSPS 1.2.x
+          # loaders (deps 1.2.131, xorg-libs 1.2.162) call it unconditionally
+          # when resolving entry points missing from their own tables; 1.2.131
+          # has no NULL check in loader_check_icds_for_phys_dev_ext_address and
+          # segfaults as soon as Wine probes a post-2020 name. Export it and
+          # delegate to the guarded instance GIPA so unsafe vendor queries
+          # still resolve to NULL instead of entering the broken Mali lookup.
+          p=Path('/tmp/mali-wrapper/src/core/mali_wrapper_icd.cpp')
+          s=p.read_text()
+          if 'vk_icdGetPhysicalDeviceProcAddr' not in s:
+              anchor='VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char* pName) {'
+              pos=s.find(anchor)
+              if pos < 0:
+                  raise SystemExit('vkGetInstanceProcAddr definition not found for phys-dev export')
+              export_fn=('VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char* pName) {\n'
+                         '    /* Loaders that negotiated ICD interface version >= 4 call this for\n'
+                         '     * physical-device entry points missing from their own dispatch tables.\n'
+                         '     * Delegate to the guarded instance GIPA (unsafe vendor queries resolve\n'
+                         '     * to NULL) instead of leaving the loader with a NULL function pointer. */\n'
+                         '    return vk_icdGetInstanceProcAddr(instance, pName);\n'
+                         '}\n\n')
+              s=s[:pos]+export_fn+s[pos:]
+              p.write_text(s)
+
           # Device-create pNext metadata (b0cee3e field run): the D3D12 device
           # stage failed with hr=0x80004005 because DeviceCreateTransform::
           # prepare() could not clone the vkd3d features2 chain -
@@ -1152,6 +1177,8 @@ jobs:
           ln -s libmali_wrapper.so dist/test14/lib/libmali_wrapper.so.1
           aarch64-linux-gnu-strip dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so
           sha256sum dist/test14/lib/libmali_wrapper.so
+          aarch64-linux-gnu-readelf --dyn-syms dist/test14/lib/libmali_wrapper.so | grep -Fq 'vk_icdGetPhysicalDeviceProcAddr'
+          echo "wrapper_phydev_export=present"
 
       - name: Collect ARM64 runtime dependency closure
         shell: bash
@@ -1353,6 +1380,7 @@ jobs:
           chmod +x "$D/test14-15-wsi.sh"
           cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
           grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'vk_icdGetPhysicalDeviceProcAddr' "$D/runtime/test14/lib/libmali_wrapper.so"
           cat >"$D/TEST15-MALI-GIPA-GUARD-DELTA.txt" <<'EOF'
           Delta over test15 post-create .19.
 
@@ -1390,6 +1418,7 @@ jobs:
           chmod +x "$D/test14-15-wsi.sh"
           cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
           grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'vk_icdGetPhysicalDeviceProcAddr' "$D/runtime/test14/lib/libmali_wrapper.so"
           WSHA=$(sha256sum "$D/runtime/test14/lib/libmali_wrapper.so" | awk '{print $1}')
           echo "wrapper_delta_sha256=$WSHA"
           cat >"$D/TEST15-WRAPPER-PNEXT-FIX-DELTA.txt" <<EOF
@@ -1414,8 +1443,8 @@ jobs:
             current Vulkan headers (/opt/khronos/include) and additionally
             registers the full vkd3d/win32u device-create pNext set
             numerically as a fallback (AW_PNEXT_DEVICE_CREATE_SET)
-          - test14-15-wsi.sh: prefers the firmware Vulkan loader (the bundled
-            1.2.x loaders crash in loader_check_icds_for_phys_dev_ext_address)
+          - test14-15-wsi.sh: loader pick prefers the bundled 1.2.131 loader
+            (deps/); see the WRAPPER-PHYDEV-EXPORT delta
           - test14-15-wsi.sh: accepts the pristine Wine 11.18 win32u.so; the
             one-byte D3DKMT NOVULKAN patch is superseded by the loader fix
           - test14-15-wsi.sh: adds +d3d12,+vkd3d Wine debug channels and
@@ -1431,6 +1460,62 @@ jobs:
           (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256)
           unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256
+
+      - name: Build delta-only wrapper phys-dev-proc-addr export
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-wrapper-phydev-export/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'vk_icdGetPhysicalDeviceProcAddr' "$D/runtime/test14/lib/libmali_wrapper.so"
+          WSHA=$(sha256sum "$D/runtime/test14/lib/libmali_wrapper.so" | awk '{print $1}')
+          echo "wrapper_delta_sha256=$WSHA"
+          cat >"$D/TEST15-WRAPPER-PHYDEV-EXPORT-DELTA.txt" <<EOF
+          Delta over test15 WRAPPER-PNEXT-FIX.
+
+          Changed files only:
+          - test14-15-wsi.sh
+          - runtime/test14/lib/libmali_wrapper.so
+
+          Root cause fixed:
+          - Wine's win32u could not map VK_KHR_win32_surface: the firmware
+            loader (1.3.296) is built without X11 WSI and filters
+            VK_KHR_xcb_surface / VK_KHR_xlib_surface / VK_KHR_wayland_surface
+            out of the instance extension list, so vkd3d failed with
+            "Failed to create vkd3d instance" (E_FAIL).
+          - The bundled 1.2.131 loader exposes those extensions and the native
+            Xlib SHM swapchain probe passes, but it segfaulted as soon as Wine
+            probed any entry point missing from its own tables: the wrapper
+            negotiates ICD interface version 5 but never exported
+            vk_icdGetPhysicalDeviceProcAddr, and
+            loader_check_icds_for_phys_dev_ext_address (no NULL check in
+            1.2.131) jumped through a NULL pointer.
+
+          Changes:
+          - wrapper exports vk_icdGetPhysicalDeviceProcAddr; it delegates to the
+            guarded instance GIPA, so unsafe vendor queries still resolve to
+            NULL (AW_GIPA_GUARD_BLOCK) instead of entering the broken Mali
+            lookup
+          - test14-15-wsi.sh: prefers the bundled 1.2.131 loader (deps/),
+            falls back to /mnt/UDISK xorg-libs 1.2.162 and then the firmware
+            loader; fails closed when the wrapper lacks the
+            vk_icdGetPhysicalDeviceProcAddr export
+
+          Installed wrapper sha256: $WSHA
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test14
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-wrapper-phydev-export && zip -qr ../Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.sha256
 
       - uses: actions/upload-artifact@v4
         with:
@@ -1451,6 +1536,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
             dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip
             dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip
+            dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.sha256
           if-no-files-found: error
 
 
