@@ -223,7 +223,19 @@ EOF
     export MALI_WRAPPER_LOG_LEVEL=3
     export MALI_WRAPPER_LOG_CATEGORY=wrapper+wsi+low-address-map
     export MALI_WRAPPER_LOG_COLORS=0
-    export LD_LIBRARY_PATH="$T14/deps:$T14/lib:$MALIDIR${XORG_LD_PATH:+:$XORG_LD_PATH}:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # TSPS loader pick: the bundled 1.2.x Vulkan loaders (deps 1.2.131,
+    # xorg-libs 1.2.162) crash inside loader_check_icds_for_phys_dev_ext_address
+    # when an app/probe queries entry points newer than their own tables.
+    # Prefer the firmware loader, which resolves every probed name.
+    if [ -e /usr/lib/libvulkan.so.1 ]; then
+        mkdir -p /tmp/animalwell-loader
+        ln -sf /usr/lib/libvulkan.so.1 /tmp/animalwell-loader/libvulkan.so.1
+        LOADER_PICK=/tmp/animalwell-loader
+    else
+        LOADER_PICK=
+    fi
+    log "loader_pick=${LOADER_PICK:-<bundled>}"
+    export LD_LIBRARY_PATH="${LOADER_PICK:+$LOADER_PICK:}$T14/deps:$T14/lib:$MALIDIR${XORG_LD_PATH:+:$XORG_LD_PATH}:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     log "real_mali=$mali"
     log "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
     log "WSI_X11_FORCE_SHM=$WSI_X11_FORCE_SHM"
@@ -306,17 +318,17 @@ export WINE_D3D_CONFIG=renderer=no3d
 export VKD3D_CONFIG=virtual_heaps
 export VKD3D_DEBUG=info
 export VKD3D_LOG_FILE="$LOGDIR/test15-vkd3d-$STAMP.log"
-export WINEDEBUG=+timestamp,+dxgi,+d3d,+wined3d,+vulkan,+x11drv,+xrandr,+system,+d3dkmt,+wgl
+export WINEDEBUG=+timestamp,+dxgi,+d3d,+wined3d,+vulkan,+x11drv,+xrandr,+system,+d3dkmt,+wgl,+d3d12,+vkd3d
 
 WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"
-WIN32U_D3DKMT_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
+WIN32U_PRISTINE_SHA=ae1d4166fda55ab9a9e0ac0ce2cbb93f425b2f3fdcbbb92e293c68629ed30ba4
 if [ -f "$WIN32U" ]; then
     win32u_sha=$(sha256sum "$WIN32U" | awk '{print $1}')
     log "win32u_sha256=$win32u_sha"
-    if [ "$win32u_sha" = "$WIN32U_D3DKMT_PATCH_SHA" ]; then
-        log "win32u_d3dkmt_novulkan_patch=present"
+    if [ "$win32u_sha" = "$WIN32U_PRISTINE_SHA" ]; then
+        log "win32u_d3dkmt_novulkan_patch=absent_pristine"
     else
-        log "ERROR win32u_d3dkmt_novulkan_patch=missing expected=$WIN32U_D3DKMT_PATCH_SHA"
+        log "ERROR win32u_pristine_check=FAIL expected=$WIN32U_PRISTINE_SHA"
         exit 34
     fi
 else
@@ -553,6 +565,10 @@ run_smoke_stage() {
 
     set +e
     env WINE_D3D_CONFIG="renderer=$renderer" \
+        MALI_WRAPPER_LOG_CATEGORY=wrapper \
+        MALI_WRAPPER_LOG_LEVEL=0 \
+        MALI_WRAPPER_LOG_CONSOLE=0 \
+        MALI_WRAPPER_LOG_FILE="/tmp/aw-wrapper-$STAMP.log" \
         "$BOX64" "$WINE" "$PFX/drive_c/aw-smoke/d3d12_smoke.exe" "$stage" >"$stage_log" 2>&1 &
     smoke_pid=$!
     (

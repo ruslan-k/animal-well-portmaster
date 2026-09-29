@@ -1025,6 +1025,91 @@ jobs:
           guard='\n'.join(guard_lines)+'\n\n'
           s=s[:pos]+guard+s[pos:]
           p.write_text(s)
+
+          # Device-create pNext metadata (b0cee3e field run): the D3D12 device
+          # stage failed with hr=0x80004005 because DeviceCreateTransform::
+          # prepare() could not clone the vkd3d features2 chain -
+          # "unsupported VkDeviceCreateInfo pNext structure type 1000340000"
+          # (VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT).
+          # device_pnext_sizes.inc only covers structures named by the header
+          # used at generation time; stale snapshots silently drop mid-2020+
+          # types that Wine 11.18 vkd3d/win32u chain on every D3D12CreateDevice.
+          # Register the full vkd3d/win32u device-create set numerically.
+          p=Path('/tmp/mali-wrapper/src/compatibility/pnext_chain.cpp')
+          s=p.read_text()
+          if 'AW_PNEXT_DEVICE_CREATE_SET' not in s:
+              needle='struct ForwardCompatibleTwoBooleanFeature {'
+              pos2=s.find(needle)
+              if pos2 < 0:
+                  raise SystemExit('TwoBoolean helper not found')
+              end2=s.find('};', pos2)+2
+              helpers=('\n\n'
+                       'struct ForwardCompatibleThreeBooleanFeature {\n'
+                       '    VkStructureType sType;\n'
+                       '    void* pNext;\n'
+                       '    VkBool32 first;\n'
+                       '    VkBool32 second;\n'
+                       '    VkBool32 third;\n'
+                       '};\n\n'
+                       'struct ForwardCompatibleTwentyBooleanFeature {\n'
+                       '    VkStructureType sType;\n'
+                       '    void* pNext;\n'
+                       '    VkBool32 values[20];\n'
+                       '};')
+              s=s[:end2]+helpers+s[end2:]
+              extra_lines=[
+                  '    /* AW_PNEXT_DEVICE_CREATE_SET: structures chained by Wine 11.18',
+                  '     * vkd3d/win32u when creating D3D12 devices; registered numerically',
+                  '     * so older registry snapshots cannot drop them. Sizes are the exact',
+                  '     * C++ layouts of (sType, pNext, N x VkBool32). */',
+                  '    if (static_cast<int64_t>(type) == 1000340000) { // VK_EXT_4444_formats',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000207000) { // VK_KHR_timeline_semaphore',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000028000) { // VK_EXT_transform_feedback',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000190002) { // VK_EXT_vertex_attribute_divisor',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000325000) { // VK_KHR_zero_initialize_workgroup_memory',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000161001) { // VK_EXT_descriptor_indexing',
+                  '        return sizeof(ForwardCompatibleTwentyBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000081001) { // VK_EXT_conditional_rendering',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000102000) { // VK_EXT_depth_clip_enable',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000251000) { // VK_EXT_fragment_shader_interlock',
+                  '        return sizeof(ForwardCompatibleThreeBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000351000) { // VK_EXT_mutable_descriptor_type',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000286000) { // VK_EXT_robustness2',
+                  '        return sizeof(ForwardCompatibleThreeBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000276000) { // VK_EXT_shader_demote_to_helper_invocation',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000281000) { // VK_EXT_texel_buffer_alignment',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000272000) { // VK_EXT_map_memory_placed',
+                  '        return sizeof(ForwardCompatibleThreeBooleanFeature);',
+                  '    }',
+              ]
+              anchor='#include "compatibility/device_pnext_sizes.inc"'
+              if anchor not in s:
+                  raise SystemExit('pnext sizes include not found')
+              s=s.replace(anchor, '\n'.join(extra_lines)+'\n'+anchor, 1)
+              p.write_text(s)
           PY
           cat >/tmp/aarch64-toolchain.cmake <<'EOF'
           set(CMAKE_SYSTEM_NAME Linux)
@@ -1044,8 +1129,12 @@ jobs:
             -DBUILD_WSI_X11=ON -DBUILD_WSI_WAYLAND=OFF -DBUILD_WSI_HEADLESS=ON \
             -DENABLE_WAYLAND_FIFO_PRESENTATION_THREAD=OFF \
             -DMALI_DRIVER_PATH_64=libmali.so.0 \
-            -DVULKAN_REGISTRY_XML=/tmp/Vulkan-Headers/registry/vk.xml
+            -DVULKAN_REGISTRY_XML=/tmp/Vulkan-Headers/registry/vk.xml \
+            -DVULKAN_CORE_HEADER:FILEPATH=/opt/khronos/include/vulkan/vulkan_core.h
           cmake --build /tmp/mali-wrapper-build -j4
+          echo "device_pnext_sizes_entries=$(grep -c 'if (type ==' /tmp/mali-wrapper-build/generated/compatibility/device_pnext_sizes.inc || true)"
+          echo "device_pnext_sizes_4444=$(grep -c 4444_FORMATS /tmp/mali-wrapper-build/generated/compatibility/device_pnext_sizes.inc || true)"
+          echo "device_pnext_sizes_timeline=$(grep -c TIMELINE_SEMAPHORE_FEATURES /tmp/mali-wrapper-build/generated/compatibility/device_pnext_sizes.inc || true)"
 
       - name: Cross-build Xlib WSI probe
         shell: bash
@@ -1062,6 +1151,7 @@ jobs:
           cp -L "$wrapper" dist/test14/lib/libmali_wrapper.so
           ln -s libmali_wrapper.so dist/test14/lib/libmali_wrapper.so.1
           aarch64-linux-gnu-strip dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so
+          sha256sum dist/test14/lib/libmali_wrapper.so
 
       - name: Collect ARM64 runtime dependency closure
         shell: bash
@@ -1290,6 +1380,58 @@ jobs:
           unzip -l dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip
           cat dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
 
+      - name: Build delta-only wrapper device-create pNext fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-wrapper-pnext-fix/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          WSHA=$(sha256sum "$D/runtime/test14/lib/libmali_wrapper.so" | awk '{print $1}')
+          echo "wrapper_delta_sha256=$WSHA"
+          cat >"$D/TEST15-WRAPPER-PNEXT-FIX-DELTA.txt" <<EOF
+          Delta over test15 MALI-GIPA-GUARD .20.
+
+          Changed files only:
+          - test14-15-wsi.sh
+          - runtime/test14/lib/libmali_wrapper.so
+
+          Root cause fixed:
+          - D3D12CreateDevice failed with hr=0x80004005 because the wrapper's
+            DeviceCreateTransform::prepare() could not clone the vkd3d
+            features2 pNext chain:
+              unsupported VkDeviceCreateInfo pNext structure type 1000340000
+              (VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT)
+          - device_pnext_sizes.inc only covers structures named by the header
+            used at generation time; stale snapshots drop mid-2020+ types that
+            Wine 11.18 vkd3d/win32u chain on every D3D12CreateDevice.
+
+          Changes:
+          - wrapper build generates device_pnext_sizes.inc against the staged
+            current Vulkan headers (/opt/khronos/include) and additionally
+            registers the full vkd3d/win32u device-create pNext set
+            numerically as a fallback (AW_PNEXT_DEVICE_CREATE_SET)
+          - test14-15-wsi.sh: prefers the firmware Vulkan loader (the bundled
+            1.2.x loaders crash in loader_check_icds_for_phys_dev_ext_address)
+          - test14-15-wsi.sh: accepts the pristine Wine 11.18 win32u.so; the
+            one-byte D3DKMT NOVULKAN patch is superseded by the loader fix
+          - test14-15-wsi.sh: adds +d3d12,+vkd3d Wine debug channels and
+            captures wrapper ERROR logs for smoke stages
+
+          Installed wrapper sha256: $WSHA
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-wrapper-pnext-fix && zip -qr ../Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: animalwell-test14-mali-wsi-wrapper
@@ -1307,6 +1449,8 @@ jobs:
             dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
             dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip
             dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip
+            dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256
           if-no-files-found: error
 
 
