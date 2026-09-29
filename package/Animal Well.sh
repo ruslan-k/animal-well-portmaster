@@ -242,6 +242,13 @@ ensure_display() {
 }
 
 base_overrides='winemenubuilder.exe=d;mscoree=d;mshtml=d'
+# Audio-off A/B: AW_NO_AUDIO=1 disables the bundled XAudio2 (FAudio) so the
+# game's audio init fails cleanly - used to isolate the FAudio mix crash
+# (wild buffer pointers) from the graphics path.
+if [ -n "${AW_NO_AUDIO:-}" ]; then base_overrides="$base_overrides;xaudio2_9=d;xaudio2_8=d"; fi
+# Native-XAudio2 A/B: AW_XA2_NATIVE=1 prefers a user-supplied xaudio2_9.dll in
+# the game directory (e.g. the other port's build) over the bundled FAudio.
+if [ -n "${AW_XA2_NATIVE:-}" ]; then base_overrides="xaudio2_9=n,b;$base_overrides"; fi
 
 prepare_smoke_backend() {
     backend=$1
@@ -369,6 +376,26 @@ export BOX64_NOBANNER=1
 export BOX64_DYNAREC=1
 export BOX64_DYNACACHE=1
 export BOX64_LOG=${BOX64_LOG:-1}
+# box64 refuses to launch winedbg by default ("winedbg detected, not launching
+# it!"), so wine's unhandled-exception handler waits forever for a debugger that
+# never attaches and the process deadlocks (a crashed thread keeps holding the
+# heap lock). BOX64_WINEDBG=1 lets box64 launch winedbg; the crash then produces
+# a real backtrace and the process exits cleanly instead of hanging.
+export BOX64_WINEDBG=1
+# Memory-model hardening for the multithreaded engine: the x86 strong memory
+# model, aligned atomics and safe flags. box64's relaxed fast paths can expose
+# stale/torn values to the guest's other threads, which surfaces as wild buffer
+# pointers in the audio (FAudio mix) and render threads. The crash sites moved
+# when STRONGMEM changed the timing, so this is a race-class defect; keep the
+# safe set only (heavier knobs were bisected out, see below).
+export BOX64_DYNAREC_STRONGMEM=${BOX64_DYNAREC_STRONGMEM:-1}
+export BOX64_DYNAREC_ALIGNED_ATOMICS=${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}
+export BOX64_DYNAREC_SAFEFLAGS=${BOX64_DYNAREC_SAFEFLAGS:-1}
+# BLEEDING_EDGE=0 is the only extra dynarec knob verified safe on this device
+# (STRONGMEM=2, BIGBLOCK=1 and CALLRET=0 each made even `wine cmd /c ver`
+# crash at exit with SIGKILL/137 in a clean bisection).
+export BOX64_DYNAREC_BLEEDING_EDGE=${BOX64_DYNAREC_BLEEDING_EDGE:-0}
+export BOX64_SHOWSEGV=1
 export BOX64_LD_LIBRARY_PATH="$RT/box64/x64lib:$RT/wine/lib:$RT/wine/lib64${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 export XDG_CACHE_HOME="$CACHE"
 export VKD3D_SHADER_CACHE_PATH="$CACHE/vkd3d"
@@ -401,6 +428,29 @@ log "--- Box64 version ---"
 "$BOX64" -v 2>&1 || true
 log "--- Wine version ---"
 "$BOX64" "$WINE" --version 2>&1 || true
+# SCM bootstrap: the bundled ntdll.so runs wineboot with --help instead of
+# --init (patched to dodge the wineboot wait-for-services.exe hang), so
+# services.exe never starts by itself and the game's COM/RPC init fails
+# ("Failed to open service manager", RPC_S_SERVER_UNAVAILABLE). Start the
+# service control manager in the FINAL session - the seed stage resets the
+# wineserver, so this must run after it; the template's RpcSs entry then lets
+# rpcss start on demand. wineserver -k cleans it up with the session.
+log "--- service control manager (COM/RPC bootstrap) ---"
+"$BOX64" "$WINE" 'C:\windows\system32\services.exe' >>"$LOGDIR/services.log" 2>&1 &
+SCM_OK=0
+_i=0
+while [ "$_i" -lt 20 ]; do
+    sleep 1
+    if ps | grep -q "services.exe" || ps | grep -q "svchost"; then SCM_OK=1; break; fi
+    _i=$((_i + 1))
+done
+if [ "$SCM_OK" = 1 ]; then
+    log "scm_up after ${_i}s"
+else
+    log "WARNING SCM not visible after 20s"
+    tail -10 "$LOGDIR/services.log" 2>/dev/null || true
+fi
+
 log "--- starting game ---"
 log "backend=$BACKEND display=${DISPLAY:-unset} wayland=${WAYLAND_DISPLAY:-unset}"
 log "mem_available_kb=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
