@@ -400,6 +400,18 @@ display_usable() {
     [ -S "/tmp/.X11-unix/X$n" ] || return 1
     if command -v xdpyinfo >/dev/null 2>&1; then
         DISPLAY="$d" xdpyinfo >/dev/null 2>&1 || return 1
+        return 0
+    fi
+    # The device has no xdpyinfo: a socket file alone can be a stale leftover
+    # from a dead Xorg, and reusing it makes the whole wine session die. Prove
+    # there is a live listener with a real connect.
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect('/tmp/.X11-unix/X$n')" >/dev/null 2>&1 || return 1
+        return 0
+    fi
+    if [ -f "/tmp/.X$n-lock" ]; then
+        _xp=$(tr -dc '0-9' < "/tmp/.X$n-lock" 2>/dev/null || true)
+        if [ -n "$_xp" ] && ! kill -0 "$_xp" 2>/dev/null; then return 1; fi
     fi
     return 0
 }
@@ -444,6 +456,23 @@ ensure_display() {
     if [ -z "$XORG_CONFIG" ]; then
         write_xorg_config
         XORG_CONFIG="$XCONF"
+    fi
+
+    # ShadowFB A/B (PERF TRACK 2): AW_XORG_SHADOWFB=0|false disables the
+    # fbdev shadow framebuffer copy. The wrapper already copies every frame
+    # into X11 SHM, so the shadow copy may be a pure extra full-screen pass.
+    if [ -n "${AW_XORG_SHADOWFB:-}" ] && grep -q 'Option "ShadowFB"' "$XORG_CONFIG" 2>/dev/null; then
+        _sfb="$AW_XORG_SHADOWFB"
+        [ "$_sfb" = "0" ] && _sfb=false
+        [ "$_sfb" = "1" ] && _sfb=true
+        _cfg_new="/tmp/aw-xorg-shadowfb.$$.conf"
+        sed "s/Option \"ShadowFB\" *\"[^\"]*\"/Option \"ShadowFB\" \"$_sfb\"/" "$XORG_CONFIG" > "$_cfg_new" 2>/dev/null || _cfg_new=""
+        if [ -n "$_cfg_new" ] && [ -s "$_cfg_new" ]; then
+            XORG_CONFIG="$_cfg_new"
+            log "xorg ShadowFB A/B: $_sfb ($XORG_CONFIG)"
+        else
+            log "WARNING ShadowFB A/B config generation failed, keeping $XORG_CONFIG"
+        fi
     fi
 
     log "xorg_source=$XORG_SOURCE xorg_binary=$XORG xorg_config=$XORG_CONFIG"
@@ -673,7 +702,7 @@ log "--- resetting stale wineserver (fresh session with display) ---"
 sleep 1
 
 log "--- prefix sanity ---"
-run_timeout 20 "$BOX64" "$WINE" cmd /c ver >"$LOGDIR/prefix-sanity.log" 2>&1
+run_timeout 60 "$BOX64" "$WINE" cmd /c ver >"$LOGDIR/prefix-sanity.log" 2>&1
 SANITY_RC=$?
 # A non-zero rc with the version banner present means the command itself ran and
 # only the exit path died (a known wine/box64 teardown crash: SIGKILL/137). Treat
