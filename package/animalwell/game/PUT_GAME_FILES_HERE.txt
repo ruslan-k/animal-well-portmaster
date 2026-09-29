@@ -1,0 +1,4 @@
+Place your legally obtained Windows Steam files here:
+  Animal Well.exe
+  steam_api64.dll
+  steam_appid.txt

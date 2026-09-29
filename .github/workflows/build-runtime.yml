@@ -1,0 +1,1651 @@
+name: build-runtime
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s tests -v
+      - run: |
+          bash -n scripts/build_runtime.sh
+          bash -n scripts/check-abi.sh
+          sh -n 'package/Animal Well.sh'
+          sh -n 'package/Animal Well Diagnose.sh'
+          sh -n package/animalwell/diagnose.sh
+          sh -n package/animalwell/test14-15-wsi.sh
+          grep -Fq 'WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"' package/animalwell/test14-15-wsi.sh
+          if grep -Fq '$RUNTIME/wine/lib/wine/x86_64-unix/win32u.so' package/animalwell/test14-15-wsi.sh; then
+            echo "ERROR: stale undefined RUNTIME alias in test15 win32u guard" >&2
+            exit 1
+          fi
+
+      - name: Prove ABI gate fails closed
+        run: |
+          set -o pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          cp /bin/ls "$tmp/too-new-for-zero-ceiling"
+          if MAX_GLIBC=0.0 MAX_GLIBCXX=0.0 bash scripts/check-abi.sh "$tmp" 2>&1 | tee "$tmp/negative.log"; then
+            echo "ERROR: ABI checker unexpectedly accepted a deliberately impossible ceiling" >&2
+            exit 1
+          fi
+          grep -q 'ABI check: FAIL' "$tmp/negative.log"
+
+  build-aarch64-runtime:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl xz-utils zstd zip unzip make cmake python3 python3-pip \
+            file binutils gcc libc6-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross qemu-user gcc-mingw-w64-x86-64 \
+            libvulkan-dev libunwind8 libstdc++6
+          python3 -m pip install --no-cache-dir cmake==3.27.9
+          cmake --version
+          ldd --version | head -n1
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: JOBS=4 bash scripts/build_runtime.sh
+
+      - name: Validate every shipped ELF against SpruceOS ABI ceiling
+        shell: bash
+        run: |
+          set -o pipefail
+          RT=.work/package/animalwell/runtime
+          mkdir -p dist
+          bash scripts/check-abi.sh "$RT" 2>&1 | tee dist/abi-report.txt
+
+      - name: Validate formats and ARM64 loader
+        shell: bash
+        run: |
+          set -euo pipefail
+          RT=.work/package/animalwell/runtime
+          file "$RT/box64/box64" "$RT/tools/vkprobe" "$RT/tools/vulkan_ext_probe_x64" "$RT/tools/d3d12_smoke.exe"
+          file "$RT/box64/box64" | grep -q 'ARM aarch64'
+          file "$RT/tools/vkprobe" | grep -q 'ARM aarch64'
+          file "$RT/tools/vulkan_ext_probe_x64" | grep -q 'x86-64'
+          file "$RT/tools/d3d12_smoke.exe" | grep -q 'PE32+'
+          for f in "$RT"/box64/x64lib/*.so*; do
+            file "$f"
+            file "$f" | grep -q 'x86-64'
+          done
+          qemu-aarch64 -L /usr/aarch64-linux-gnu "$RT/box64/box64" -v 2>&1 | tee dist/box64-qemu.log
+
+      - name: Validate lightweight Wine prefix layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$(pwd)/.work/package/animalwell"
+          RT="$ROOT/runtime"
+          T="$ROOT/prefix-template"
+          P=/tmp/animalwell-ci-prefix
+          rm -rf "$P"
+          mkdir -p "$P/dosdevices" "$P/drive_c/windows" "$P/drive_c/users" \
+            "$P/drive_c/Program Files" "$P/drive_c/Program Files (x86)" \
+            "$P/drive_c/ProgramData" "$P/drive_c/windows/temp"
+          cp "$T/system.reg" "$P/system.reg"
+          cp "$T/user.reg" "$P/user.reg"
+          cp "$T/userdef.reg" "$P/userdef.reg"
+          cp "$T/.update-timestamp" "$P/.update-timestamp"
+          ln -s ../drive_c "$P/dosdevices/c:"
+          ln -s / "$P/dosdevices/z:"
+          ln -s "$RT/wine/lib/wine/x86_64-windows" "$P/drive_c/windows/system32"
+          ln -s "$RT/wine/lib/wine/i386-windows" "$P/drive_c/windows/syswow64"
+          mkdir -p /tmp/animalwell-ci-user
+          ln -s /tmp/animalwell-ci-user "$P/drive_c/users/root"
+          test -f "$P/drive_c/windows/system32/kernel32.dll"
+          WINEPREFIX="$P" WINEARCH=win64 WINEDEBUG=-all \
+            WINEDLLOVERRIDES='winemenubuilder.exe=d;mscoree=d;mshtml=d' \
+            "$RT/wine/bin/wine" cmd /c ver 2>&1 | tee dist/prefix-sanity.log
+          grep -q 'Microsoft Windows' dist/prefix-sanity.log
+
+      - name: Build delta-only test15 prefix patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-prefix-delta/animalwell
+          mkdir -p "$D/prefix-template"
+          cp -a .work/package/animalwell/prefix-template/. "$D/prefix-template/"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-PREFIX-DELTA.txt" <<'EOF'
+          Delta over the previous test14/test15 field patches.
+
+          Adds only the files that test15 needs but earlier WSI-only deltas did not ship:
+          - Wine 11.18 lightweight prefix registry template
+          - current test14/test15 harness
+
+          The registry template was generated by the same runtime build and passed the
+          host prefix sanity check before packaging. No Wine runtime binaries are repeated.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-prefix-delta && zip -qr ../Animal-Well-TSPS-test15-PREFIX-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-PREFIX-DELTA.zip > Animal-Well-TSPS-test15-PREFIX-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-PREFIX-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-PREFIX-DELTA.sha256
+
+      - name: Build delta-only test15 no3d diagnostic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-no3d-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-NO3D-DELTA.txt" <<'EOF'
+          Delta over the previous test15 prefix patch.
+
+          Changed files only:
+          - test14-15-wsi.sh: test15 now sets WINE_D3D_CONFIG=renderer=no3d
+            so DXGI/WineD3D does not initialise its Vulkan renderer.
+            Wine d3d12.dll still uses VKD3D/Vulkan independently.
+          - runtime/tools/d3d12_smoke.exe: unbuffered stage markers:
+              STAGE_DXGI_FACTORY_BEGIN/PASS
+              STAGE_D3D12_DEVICE_BEGIN/PASS
+
+          Re-run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-no3d-delta && zip -qr ../Animal-Well-TSPS-test15-NO3D-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-NO3D-DELTA.zip > Animal-Well-TSPS-test15-NO3D-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-NO3D-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
+
+      - name: Build delta-only test15 staged diagnostic patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-staged-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-STAGED-DELTA.txt" <<'EOF'
+          Delta over the previous test15 NO3D patch.
+
+          Changed files only:
+          - test14-15-wsi.sh now runs five independent probes:
+              load-dxgi
+              load-d3d12
+              factory
+              device
+              all
+            Each probe has its own timeout and wineserver reset.
+          - d3d12_smoke.exe now supports those modes and prints unbuffered
+            STAGE_LOAD_DXGI_*, STAGE_LOAD_D3D12_*,
+            STAGE_DXGI_FACTORY_*, and STAGE_D3D12_DEVICE_* markers.
+
+          Re-run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-staged-delta && zip -qr ../Animal-Well-TSPS-test15-STAGED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-STAGED-DELTA.zip > Animal-Well-TSPS-test15-STAGED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-STAGED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
+
+      - name: Build delta-only test15 display/KMT renderer matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-display-kmt-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-DISPLAY-KMT-DELTA.txt" <<'EOF'
+          Delta over the previous PERSISTENT-X11 diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * fixes Mali wrapper debug category to wrapper+wsi+low-address-map
+            * resets wineserver between probes after watchdog termination
+            * adds renderer matrix: no3d, gl, vulkan
+            * enables Wine d3d/x11drv tracing
+            * conditionally tests D3D12CreateDevice only after a factory passes
+          - runtime/tools/d3d12_smoke.exe
+            * adds display-kmt mode
+            * probes EnumDisplayDevicesW
+            * probes D3DKMTOpenAdapterFromGdiDisplayName
+            * probes D3DKMTOpenAdapterFromLuid
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-display-kmt-delta && zip -qr ../Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip > Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
+
+      - name: Build delta-only test15 virtual desktop diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-vdesktop-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/d3d12_smoke.exe "$D/runtime/tools/d3d12_smoke.exe"
+          cat >"$D/TEST15-VDESKTOP-DELTA.txt" <<'EOF'
+          Delta over the previous DISPLAY-KMT diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * compares native Win32 display enumeration with Wine virtual desktop mode
+            * tests vdesktop DXGI factories for no3d, gl, and vulkan
+            * only proceeds to D3D12CreateDevice when the matching factory passes
+          - runtime/tools/d3d12_smoke.exe
+            * adds vdesktop-* modes
+            * creates a 1280x720 Wine virtual desktop with DF_WINE_VIRTUAL_DESKTOP
+            * switches the test thread to that desktop before display/DXGI probing
+            * retries EnumDisplayDevicesW while Wine refreshes display topology
+
+          Wine 11.18 forces update_display_cache(TRUE) when the virtual desktop
+          is created and again when the thread switches into that desktop.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-vdesktop-delta && zip -qr ../Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip > Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
+
+      - name: Build delta-only test15 display seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-display-seed-delta/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-DISPLAY-SEED-DELTA.txt" <<'EOF'
+          Delta over the previous VDESKTOP diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.10
+            * adds Wine +system,+d3dkmt,+xrandr tracing
+            * reproduces the real-Vulkan display enumeration baseline
+            * temporarily points VK_ICD_FILENAMES at a guaranteed-missing ICD
+              so Wine display-cache population can proceed without Vulkan GPU discovery
+            * tries both native EnumDisplayDevicesW and DF_WINE_VIRTUAL_DESKTOP
+              while Vulkan discovery is disabled
+            * restores the real Mali wrapper and checks whether \\.\DISPLAY1
+              persists in the same prefix after wineserver restart
+            * only retries DXGI/D3D12 if real-Vulkan display enumeration returns
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-display-seed-delta && zip -qr ../Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip > Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256
+
+      - name: Build delta-only test15 GPU-less display seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-display-seed-nogpu-delta/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-DISPLAY-SEED-NOGPU-DELTA.txt" <<'EOF'
+          Delta over the previous DISPLAY-SEED diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.11
+            * adds +wgl tracing
+            * disables Vulkan ICD during the seed phase
+            * shadows libEGL.so.1 and libGL.so.1 with invalid files at the
+              front of LD_LIBRARY_PATH so Wine OpenGL GPU discovery fails fast
+            * retries native and virtual-desktop display-cache population
+            * restores the real Mali Vulkan/OpenGL paths and verifies whether
+              \\.\DISPLAY1 persists in the same prefix
+            * only retries DXGI/D3D12 if real-GPU display enumeration succeeds
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-display-seed-nogpu-delta && zip -qr ../Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip > Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256
+
+      - name: Build delta-only test15 quiet nulldrv seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-quiet-nulldrv-seed/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-QUIET-NULLDRV-SEED-DELTA.txt" <<'EOF'
+          Delta over the previous DISPLAY-SEED-NOGPU diagnostic patch.
+
+          Changed file only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.12
+            * keeps Vulkan and EGL/GL disabled only during one-time display seed
+            * sets WINEDEBUG=-all during that seed to avoid thousands of nulldrv
+              missing-entrypoint warnings and their Box64/logging overhead
+            * raises native seed watchdog to 120s
+            * only tries the 150s virtual-desktop seed if native seed does not
+              reach STAGE_ENUM_DISPLAY_PASS
+            * records elapsed seed time
+            * restores normal Wine debug and real GPU libraries before verifying
+              that the display topology persists
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-quiet-nulldrv-seed && zip -qr ../Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.zip > Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.sha256
+
+      - name: Build delta-only test15 same-wineserver seed diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-same-wineserver-seed/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-SAME-WINESERVER-SEED-DELTA.txt" <<'EOF'
+          Delta over the previous QUIET-NULLDRV-SEED diagnostic patch.
+
+          Changed file only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.13
+            * successful GPU-less display seed keeps the same wineserver alive
+            * restores real Vulkan/OpenGL env for a fresh Wine client without
+              restarting wineserver
+            * verifies \\.\DISPLAY1 + D3DKMT in that same Wine session
+            * if successful, immediately tests DXGI factory and D3D12 device
+              while preserving the seeded wineserver
+            * wineserver is killed only after the full same-session matrix
+
+          No runtime binaries are included in this delta.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-same-wineserver-seed && zip -qr ../Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip > Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
+
+      - name: Build delta-only test15 D3DKMT win32u patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-d3dkmt-win32u-delta/animalwell
+          mkdir -p "$D/runtime/wine/lib/wine/x86_64-unix" "$D/runtime/wine-patches"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/wine/lib/wine/x86_64-unix/win32u.so              "$D/runtime/wine/lib/wine/x86_64-unix/win32u.so"
+          cp .work/package/animalwell/runtime/wine-patches/D3DKMT-NOVULKAN.txt              "$D/runtime/wine-patches/D3DKMT-NOVULKAN.txt"
+          cat >"$D/TEST15-D3DKMT-WIN32U-DELTA.txt" <<'EOF'
+          Delta over the previous SAME-WINESERVER-SEED diagnostic patch.
+
+          Changed files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.14
+            * requires the exact patched win32u.so SHA before running
+          - runtime/wine/lib/wine/x86_64-unix/win32u.so
+            * exact Wine 11.18/Kron4ek binary with one-byte patch
+            * d3dkmt_init_vulkan first opcode changed to RET
+            * disables only D3DKMT's private Vulkan instance
+            * does not disable Vulkan for VKD3D/D3D12
+          - runtime/wine-patches/D3DKMT-NOVULKAN.txt
+            * exact original/patched SHA and symbol metadata
+
+          Rationale:
+          same-wineserver field testing proves DISPLAY1 survives and the crash occurs
+          only when NtGdiDdDDIOpenAdapterFromLuid initializes D3DKMT's private Vulkan
+          instance. Wine already treats a missing D3DKMT Vulkan instance as non-fatal.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          sha256sum "$D/runtime/wine/lib/wine/x86_64-unix/win32u.so"
+          objdump -d --start-address=0x44940 --stop-address=0x44950             "$D/runtime/wine/lib/wine/x86_64-unix/win32u.so"
+          (cd dist/test15-d3dkmt-win32u-delta && zip -qr ../Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip > Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256
+
+      - name: Build script-only test15 D3DKMT win32u harness fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-d3dkmt-win32u-harnessfix/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-D3DKMT-WIN32U-HARNESSFIX-DELTA.txt" <<'EOF'
+          Delta over Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip.
+
+          Changed file only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.15
+            * fixes the fail-closed patched-win32u check to use the existing
+              RT runtime root instead of the undefined RUNTIME variable
+
+          The previous D3DKMT-WIN32U delta must already be installed because this
+          delta intentionally does not repeat win32u.so. The harness still verifies
+          the exact patched win32u SHA before any Wine diagnostics run.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-d3dkmt-win32u-harnessfix && zip -qr ../Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip > Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.sha256
+
+      - name: Build delta-only test15 Vulkan bridge probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-vulkan-bridge-probe/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp .work/package/animalwell/runtime/tools/vulkan_ext_probe_x64 "$D/runtime/tools/vulkan_ext_probe_x64"
+          chmod +x "$D/runtime/tools/vulkan_ext_probe_x64"
+          cat >"$D/TEST15-VULKAN-BRIDGE-PROBE-DELTA.txt" <<'EOF'
+          Delta over the previous D3DKMT-WIN32U-HARNESSFIX diagnostic.
+
+          Changed/new files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.16
+            * runs an x86-64 Vulkan loader bridge matrix before Wine
+            * tests direct dlsym and vkGetInstanceProcAddr paths
+            * tests count-only and fill calls separately
+            * exits early when the Box64/native Vulkan bridge itself fails
+          - runtime/tools/vulkan_ext_probe_x64
+            * tiny x86-64 Linux probe built on Ubuntu 20.04 / glibc 2.31
+            * dlopens libvulkan.so.1 and calls
+              vkEnumerateInstanceExtensionProperties without Wine
+
+          This isolates:
+            x86-64 guest -> Box64 Vulkan wrapper -> native libvulkan/Mali ICD
+          from WineVulkan and VKD3D.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-vulkan-bridge-probe && zip -qr ../Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip > Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256
+
+      - name: Verify game-free artifact
+        run: |
+          ! find .work/package -type f \( -iname 'Animal Well.exe' -o -iname '*.nsp' -o -iname 'main' -o -iname 'sdk' \) -print -quit | grep -q .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-portmaster-runtime
+          path: |
+            dist/animalwell-portmaster-runtime.zip
+            dist/SHA256SUMS
+            dist/compatibility.txt
+            dist/box64-readelf.txt
+            dist/box64-glibc-symbols.txt
+            dist/abi-report.txt
+            dist/box64-qemu.log
+            dist/prefix-wineboot.log
+            dist/prefix-sanity.log
+            dist/Animal-Well-TSPS-test15-PREFIX-DELTA.zip
+            dist/Animal-Well-TSPS-test15-PREFIX-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-NO3D-DELTA.zip
+            dist/Animal-Well-TSPS-test15-NO3D-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-STAGED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-STAGED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.zip
+            dist/Animal-Well-TSPS-test15-DISPLAY-KMT-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.zip
+            dist/Animal-Well-TSPS-test15-VDESKTOP-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.zip
+            dist/Animal-Well-TSPS-test15-DISPLAY-SEED-NOGPU-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-QUIET-NULLDRV-SEED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.zip
+            dist/Animal-Well-TSPS-test15-SAME-WINESERVER-SEED-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.zip
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.zip
+            dist/Animal-Well-TSPS-test15-D3DKMT-WIN32U-HARNESSFIX-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip
+            dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256
+          if-no-files-found: error
+
+
+  build-test15-vulkan-bridge-delta:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install minimal Focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates gcc libc6-dev file binutils zip unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Build x86-64 Vulkan bridge probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/vulkan-bridge-probe
+          gcc -O2 -Wall -Wextra -o dist/vulkan-bridge-probe/vulkan_ext_probe_x64 \
+            scripts/vulkan_ext_probe_x64.c -ldl
+          file dist/vulkan-bridge-probe/vulkan_ext_probe_x64
+          file dist/vulkan-bridge-probe/vulkan_ext_probe_x64 | grep -q 'x86-64'
+          bash scripts/check-abi.sh dist/vulkan-bridge-probe 2>&1 | tee dist/vulkan-bridge-probe/abi-report.txt
+
+      - name: Package latest field delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/vulkan-bridge-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/vulkan-bridge-probe/vulkan_ext_probe_x64 "$D/runtime/tools/vulkan_ext_probe_x64"
+          chmod +x "$D/runtime/tools/vulkan_ext_probe_x64"
+          cat >"$D/TEST15-VULKAN-BRIDGE-PROBE-DELTA.txt" <<'EOF'
+          Delta over the previous D3DKMT-WIN32U-HARNESSFIX diagnostic.
+
+          Changed/new files only:
+          - test14-15-wsi.sh
+            * harness_version=2026-09-28.16
+            * runs x86-64 Vulkan bridge tests before Wine
+            * compares direct symbol vs vkGetInstanceProcAddr
+            * separates count-only vs fill calls
+            * retries with BOX64_NOVULKANOVERLAY=1 if the default bridge fails
+            * continues Wine automatically when the no-overlay workaround passes
+            * exits early instead of repeating the long Wine timeout when both fail
+          - runtime/tools/vulkan_ext_probe_x64
+            * tiny x86-64 Linux ELF built on Ubuntu 20.04 / glibc 2.31
+            * calls vkEnumerateInstanceExtensionProperties without Wine
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/vulkan-bridge-delta && zip -qr ../Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip > Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-vulkan-bridge-delta
+          path: |
+            dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.zip
+            dist/Animal-Well-TSPS-test15-VULKAN-BRIDGE-PROBE-DELTA.sha256
+            dist/vulkan-bridge-probe/abi-report.txt
+          if-no-files-found: error
+
+
+  build-test15-wrapper-logoff-delta:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    steps:
+      - name: Install minimal packaging dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends zip unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Validate harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n package/animalwell/test14-15-wsi.sh
+          grep -Fq 'harness_version=2026-09-29.21' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'MALI_WRAPPER_LOG_CATEGORY="$log_category"' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'MALI_WRAPPER_WORKAROUND=MALI_WRAPPER_LOG_CATEGORY=off' package/animalwell/test14-15-wsi.sh
+
+      - name: Package script-only field delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/wrapper-logoff-delta/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-WRAPPER-LOGOFF-DELTA.txt" <<'EOF'
+          Delta over test15 Vulkan-bridge-probe .16.
+
+          Changed file only:
+          - test14-15-wsi.sh
+
+          Revision 2026-09-28.17:
+          - disables mali-wrapper C++ logging before the Box64/native Vulkan bridge
+          - avoids Logger::Log() stringstream/std::cout after .16 proved the crash
+            lands in libstdc++ std::ostream::sentry
+          - retries with BOX64_NOVULKANOVERLAY=1 only if log-off alone still fails
+          - if the bridge passes, preserves MALI_WRAPPER_LOG_CATEGORY=off for Wine
+            and continues to the existing display/D3DKMT/DXGI/D3D12 stages
+
+          Prerequisite:
+          - the previous .16 delta is already installed, including
+            runtime/tools/vulkan_ext_probe_x64
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/wrapper-logoff-delta && zip -qr ../Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-wrapper-logoff-delta
+          path: |
+            dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.zip
+            dist/Animal-Well-TSPS-test15-WRAPPER-LOGOFF-DELTA.sha256
+          if-no-files-found: error
+
+
+  build-test15-vkcreate-delta:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install minimal Focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates gcc libc6-dev file binutils zip unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Build updated x86-64 Vulkan post-create probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/vkcreate-probe
+          gcc -O2 -Wall -Wextra -o dist/vkcreate-probe/vulkan_ext_probe_x64 \
+            scripts/vulkan_ext_probe_x64.c -ldl
+          file dist/vkcreate-probe/vulkan_ext_probe_x64
+          file dist/vkcreate-probe/vulkan_ext_probe_x64 | grep -q 'x86-64'
+          bash scripts/check-abi.sh dist/vkcreate-probe 2>&1 | tee dist/vkcreate-probe/abi-report.txt
+          sh -n package/animalwell/test14-15-wsi.sh
+          grep -Fq 'harness_version=2026-09-29.21' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'VKPOSTCREATE_STAGE_RESULT' package/animalwell/test14-15-wsi.sh
+          grep -Fq 'postcreate-wine5' scripts/vulkan_ext_probe_x64.c
+
+      - name: Package post-create GIPA field delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/postcreate-gipa-delta/animalwell
+          mkdir -p "$D/runtime/tools"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/vkcreate-probe/vulkan_ext_probe_x64 "$D/runtime/tools/vulkan_ext_probe_x64"
+          chmod +x "$D/runtime/tools/vulkan_ext_probe_x64"
+          cat >"$D/TEST15-POSTCREATE-GIPA-DELTA.txt" <<'EOF'
+          Delta over test15 vkCreateInstance .18.
+
+          Changed/new files only:
+          - test14-15-wsi.sh
+          - runtime/tools/vulkan_ext_probe_x64
+
+          Revision 2026-09-28.19:
+          - keeps the proven MALI_WRAPPER_LOG_CATEGORY=off workaround
+          - fixes vkCreate probe semantics so rc=139 is not reported as a clean PASS
+          - after Wine-like vkCreateInstance, scans instance/physical-device proc names one by one
+          - logs VKPOSTPROC_BEGIN/VKPOSTPROC_END around every vkGetInstanceProcAddr lookup
+          - reproduces Wine's first physical-device bootstrap calls:
+              vkEnumeratePhysicalDevices count/fill
+              vkGetPhysicalDeviceMemoryProperties
+              vkEnumerateDeviceExtensionProperties count/fill
+          - exits early when the raw post-create path fails
+          - if raw post-create passes, runs Wine's D3D12 device stage with BOX64_LOG=2
+            so the last Vulkan bridge lookup before a Wine-only fault is visible
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/postcreate-gipa-delta && zip -qr ../Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.zip > Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-postcreate-gipa-delta
+          path: |
+            dist/Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.zip
+            dist/Animal-Well-TSPS-test15-POSTCREATE-GIPA-DELTA.sha256
+            dist/vkcreate-probe/abi-report.txt
+          if-no-files-found: error
+
+  build-test13-direct-vkd3d:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install Focal build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git curl xz-utils make cmake pkg-config gcc g++ bison flex \
+            libjson-perl wine64-tools libvulkan-dev libx11-dev libxcb1-dev libxext-dev \
+            file binutils
+
+      - uses: actions/checkout@v4
+
+      - name: Install current Vulkan and SPIR-V headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          git clone -q --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/SPIRV-Headers
+          mkdir -p /opt/khronos/include
+          cp -a /tmp/Vulkan-Headers/include/. /opt/khronos/include/
+          cp -a /tmp/SPIRV-Headers/include/. /opt/khronos/include/
+          test -f /opt/khronos/include/vulkan/vulkan.h
+          test -d /opt/khronos/include/spirv
+
+      - name: Build standalone vkd3d 2.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 -o /tmp/vkd3d-2.1.tar.xz \
+            https://dl.winehq.org/vkd3d/source/vkd3d-2.1.tar.xz
+          tar -xJf /tmp/vkd3d-2.1.tar.xz -C /tmp
+          cd /tmp/vkd3d-2.1
+          CPPFLAGS="-I/opt/khronos/include" \
+            ./configure --prefix=/opt/vkd3d --disable-tests --disable-demos
+          make -j4
+          make install
+
+      - name: Build direct VKD3D probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/test13/lib
+          pc=
+          for d in /opt/vkd3d/lib/pkgconfig /opt/vkd3d/lib64/pkgconfig; do
+            [ -f "$d/libvkd3d.pc" ] && pc="$d" && break
+          done
+          [ -n "$pc" ] || { echo "libvkd3d.pc not found" >&2; find /opt/vkd3d -maxdepth 4 -type f -print; exit 2; }
+          export PKG_CONFIG_PATH="$pc"
+          gcc -O2 -Wall -Wextra -o dist/test13/vkd3d_direct_probe \
+            scripts/vkd3d_direct_probe.c $(pkg-config --cflags --libs libvkd3d)
+          gcc -O2 -Wall -Wextra -o dist/test13/vulkan_ext_probe_x64 \
+            scripts/vulkan_ext_probe_x64.c -ldl
+          cp -a /opt/vkd3d/lib*/libvkd3d.so* dist/test13/lib/ 2>/dev/null || true
+          cp -a /opt/vkd3d/lib*/libvkd3d-shader.so* dist/test13/lib/ 2>/dev/null || true
+          cp -a /opt/vkd3d/lib*/libvkd3d-utils.so* dist/test13/lib/ 2>/dev/null || true
+          test -x dist/test13/vkd3d_direct_probe
+          test -x dist/test13/vulkan_ext_probe_x64
+          test -e dist/test13/lib/libvkd3d.so.1
+          file dist/test13/vkd3d_direct_probe dist/test13/vulkan_ext_probe_x64 dist/test13/lib/*.so*
+          file dist/test13/vulkan_ext_probe_x64 | grep -q 'x86-64'
+          ldd dist/test13/vkd3d_direct_probe | tee dist/test13/ldd.txt
+          readelf -d dist/test13/vkd3d_direct_probe > dist/test13/readelf.txt
+          printf 'vkd3d=2.1\nmode=direct-no-wine-no-dxgi-no-wsi\nbuild_glibc=2.31\n' > dist/test13/MANIFEST.txt
+
+      - name: Validate test13 ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-abi.sh dist/test13 2>&1 | tee dist/test13/abi-report.txt
+
+      - name: Host smoke for binary/linkage only
+        shell: bash
+        run: |
+          set +e
+          LD_LIBRARY_PATH="$PWD/dist/test13/lib" VKD3D_DEBUG=info \
+            ./dist/test13/vkd3d_direct_probe >dist/test13/host-run.log 2>&1
+          echo "host_exit=$?" >>dist/test13/host-run.log
+          cat dist/test13/host-run.log
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test13-direct-vkd3d
+          path: dist/test13
+          if-no-files-found: error
+
+
+  build-test14-mali-wsi-wrapper:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Configure amd64 + arm64 Focal repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          dpkg --add-architecture arm64
+          cat >/etc/apt/sources.list <<'EOF'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main universe
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal-updates main universe
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu focal-security main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe
+          EOF
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git cmake make pkg-config python3 file binutils zip unzip \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+            wayland-protocols libwayland-bin \
+            libvulkan-dev:arm64 libx11-dev:arm64 libx11-xcb-dev:arm64 \
+            libxext-dev:arm64 libxrandr-dev:arm64 \
+            libxcb1-dev:arm64 libxcb-dri3-dev:arm64 libxcb-present-dev:arm64 \
+            libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
+            libdrm-dev:arm64 libwayland-dev:arm64
+
+      - uses: actions/checkout@v4
+
+      - name: Stage current Vulkan headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          mkdir -p /opt/khronos/include /opt/khronos/lib/pkgconfig
+          cp -a /tmp/Vulkan-Headers/include/. /opt/khronos/include/
+          mkdir -p /opt/khronos/include/linux
+          cat >/opt/khronos/include/linux/dma-heap.h <<'EOF'
+          /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
+          #ifndef _UAPI_LINUX_DMABUF_POOL_H
+          #define _UAPI_LINUX_DMABUF_POOL_H
+          #include <linux/ioctl.h>
+          #include <linux/types.h>
+          #define DMA_HEAP_VALID_FD_FLAGS (O_CLOEXEC | O_ACCMODE)
+          #define DMA_HEAP_VALID_HEAP_FLAGS (0ULL)
+          struct dma_heap_allocation_data {
+              __u64 len;
+              __u32 fd;
+              __u32 fd_flags;
+              __u64 heap_flags;
+          };
+          #define DMA_HEAP_IOC_MAGIC 'H'
+          #define DMA_HEAP_IOCTL_ALLOC _IOWR(DMA_HEAP_IOC_MAGIC, 0x0, struct dma_heap_allocation_data)
+          #endif
+          EOF
+          cat >/opt/khronos/lib/pkgconfig/vulkan.pc <<'EOF'
+          prefix=/usr
+          exec_prefix=${prefix}
+          libdir=/usr/lib/aarch64-linux-gnu
+          includedir=/opt/khronos/include
+
+          Name: Vulkan-Loader
+          Description: Vulkan Loader
+          Version: 1.3.296
+          Libs: -L${libdir} -lvulkan
+          Cflags: -I${includedir}
+          EOF
+
+      - name: Cross-build Mali WSI wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/zeyadadev/mali-vulkan-icd-wrapper.git /tmp/mali-wrapper
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('/tmp/mali-wrapper/src/wsi/x11/drm_display.cpp')
+          s=p.read_text()
+          pat=r'static bool fill_supported_formats_with_modifiers\(.*?\n\}\n\nstd::optional<drm_display>'
+          repl="static bool fill_supported_formats_with_modifiers(uint32_t primary_plane_index, const util::fd_owner &drm_fd,\\n                                                   const drm_plane_resources_owner &plane_res,\\n                                                   util::vector<drm_format_pair> &supported_formats)\\n{\\n    (void)primary_plane_index;\\n    (void)drm_fd;\\n    (void)plane_res;\\n    (void)supported_formats;\\n    return false;\\n}\\n\\nstd::optional<drm_display>"
+          ns,n=re.subn(pat,repl,s,count=1,flags=re.S)
+          if n != 1:
+              raise SystemExit('failed to patch old-libdrm modifier path')
+          p.write_text(ns)
+
+          p=Path('/tmp/mali-wrapper/src/wsi/x11/swapchain.cpp')
+          s=p.read_text()
+          old=('   WSIALLOC_ASSERT_VERSION();\n'
+               '   if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)\n'
+               '   {\n'
+               '      WSI_LOG_ERROR("Failed to create wsi allocator.");\n'
+               '      return VK_ERROR_INITIALIZATION_FAILED;\n'
+               '   }\n'
+               '\n'
+               '   const bool force_shm = env_var_is_enabled(std::getenv("WSI_X11_FORCE_SHM"));\n'
+               '   const bool force_bridge = env_var_is_enabled(std::getenv("WSI_X11_FORCE_BRIDGE"));')
+          new=('   const bool force_shm = env_var_is_enabled(std::getenv("WSI_X11_FORCE_SHM"));\n'
+               '\n'
+               '   /* Forced SHM does not use wsialloc/DMA-BUF memory. */\n'
+               '   if (!force_shm)\n'
+               '   {\n'
+               '      WSIALLOC_ASSERT_VERSION();\n'
+               '      if (wsialloc_new(&m_wsi_allocator) != WSIALLOC_ERROR_NONE)\n'
+               '      {\n'
+               '         WSI_LOG_ERROR("Failed to create wsi allocator.");\n'
+               '         return VK_ERROR_INITIALIZATION_FAILED;\n'
+               '      }\n'
+               '   }\n'
+               '   else\n'
+               '   {\n'
+               '      WSI_LOG_INFO("WSI_X11_FORCE_SHM: skipping unused wsialloc/DMA-BUF allocator initialization.");\n'
+               '   }\n'
+               '\n'
+               '   const bool force_bridge = env_var_is_enabled(std::getenv("WSI_X11_FORCE_BRIDGE"));')
+          if old not in s:
+              start=s.find('WSIALLOC_ASSERT_VERSION()')
+              raise SystemExit('failed to patch X11 wsialloc init block; nearby='+repr(s[start:start+500]))
+          p.write_text(s.replace(old,new,1))
+
+          # The TSPS r42 Mali driver crashes when its GIPA is asked for some
+          # recent vendor-specific physical-device entry points that Wine 11.18
+          # eagerly probes while building the instance dispatch table.
+          p=Path('/tmp/mali-wrapper/src/core/mali_wrapper_icd.cpp')
+          s=p.read_text()
+          start=s.find('static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL internal_vkGetInstanceProcAddr')
+          if start < 0:
+              raise SystemExit('internal_vkGetInstanceProcAddr not found')
+          needle='    auto mali_proc_addr = LibraryLoader::Instance().GetMaliGetInstanceProcAddr();'
+          pos=s.find(needle,start)
+          if pos < 0:
+              raise SystemExit('Mali GIPA fallback not found')
+          guard_lines=[
+              '    /*',
+              '     * ANIMAL WELL / TSPS compatibility guard.',
+              '     * The vendor r42 Mali GIPA crashes instead of returning NULL for several',
+              '     * newer vendor-specific query names. Wine 11.18 eagerly probes every',
+              '     * generated instance proc, so fail closed for entry points not used by',
+              '     * VKD3D/ANIMAL WELL rather than entering the broken vendor lookup.',
+              '     */',
+              '    static const char *const aw_unsafe_gipa_names[] = {',
+              '        "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM",',
+              '        "vkGetPhysicalDeviceExternalTensorPropertiesARM",',
+              '        "vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM",',
+              '        "vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM",',
+              '        "vkGetPhysicalDeviceOpticalFlowImageFormatsNV",',
+              '        "vkGetPhysicalDeviceCooperativeVectorPropertiesNV",',
+              '        "vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV",',
+              '    };',
+              '    for (const char *unsafe_name : aw_unsafe_gipa_names)',
+              '    {',
+              '        if (strcmp(pName, unsafe_name) == 0)',
+              '        {',
+              '            fprintf(stderr, "AW_GIPA_GUARD_BLOCK name=%s\\\\n", pName);',
+              '            return nullptr;',
+              '        }',
+              '    }',
+          ]
+          guard='\n'.join(guard_lines)+'\n\n'
+          s=s[:pos]+guard+s[pos:]
+          p.write_text(s)
+
+          # ICD interface version 5 requires vk_icdGetPhysicalDeviceProcAddr, but
+          # the upstream wrapper never exported it. The bundled TSPS 1.2.x
+          # loaders (deps 1.2.131, xorg-libs 1.2.162) call it unconditionally
+          # when resolving entry points missing from their own tables; 1.2.131
+          # has no NULL check in loader_check_icds_for_phys_dev_ext_address and
+          # segfaults as soon as Wine probes a post-2020 name. Export it and
+          # delegate to the guarded instance GIPA so unsafe vendor queries
+          # still resolve to NULL instead of entering the broken Mali lookup.
+          p=Path('/tmp/mali-wrapper/src/core/mali_wrapper_icd.cpp')
+          s=p.read_text()
+          if 'vk_icdGetPhysicalDeviceProcAddr' not in s:
+              anchor='VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char* pName) {'
+              pos=s.find(anchor)
+              if pos < 0:
+                  raise SystemExit('vkGetInstanceProcAddr definition not found for phys-dev export')
+              export_fn=('VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char* pName) {\n'
+                         '    /* Loaders that negotiated ICD interface version >= 4 call this for\n'
+                         '     * physical-device entry points missing from their own dispatch tables.\n'
+                         '     * Delegate to the guarded instance GIPA (unsafe vendor queries resolve\n'
+                         '     * to NULL) instead of leaving the loader with a NULL function pointer. */\n'
+                         '    return vk_icdGetInstanceProcAddr(instance, pName);\n'
+                         '}\n\n')
+              s=s[:pos]+export_fn+s[pos:]
+              p.write_text(s)
+
+          # Device-create pNext metadata (b0cee3e field run): the D3D12 device
+          # stage failed with hr=0x80004005 because DeviceCreateTransform::
+          # prepare() could not clone the vkd3d features2 chain -
+          # "unsupported VkDeviceCreateInfo pNext structure type 1000340000"
+          # (VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT).
+          # device_pnext_sizes.inc only covers structures named by the header
+          # used at generation time; stale snapshots silently drop mid-2020+
+          # types that Wine 11.18 vkd3d/win32u chain on every D3D12CreateDevice.
+          # Register the full vkd3d/win32u device-create set numerically.
+          p=Path('/tmp/mali-wrapper/src/compatibility/pnext_chain.cpp')
+          s=p.read_text()
+          if 'AW_PNEXT_DEVICE_CREATE_SET' not in s:
+              needle='struct ForwardCompatibleTwoBooleanFeature {'
+              pos2=s.find(needle)
+              if pos2 < 0:
+                  raise SystemExit('TwoBoolean helper not found')
+              end2=s.find('};', pos2)+2
+              helpers=('\n\n'
+                       'struct ForwardCompatibleThreeBooleanFeature {\n'
+                       '    VkStructureType sType;\n'
+                       '    void* pNext;\n'
+                       '    VkBool32 first;\n'
+                       '    VkBool32 second;\n'
+                       '    VkBool32 third;\n'
+                       '};\n\n'
+                       'struct ForwardCompatibleTwentyBooleanFeature {\n'
+                       '    VkStructureType sType;\n'
+                       '    void* pNext;\n'
+                       '    VkBool32 values[20];\n'
+                       '};')
+              s=s[:end2]+helpers+s[end2:]
+              extra_lines=[
+                  '    /* AW_PNEXT_DEVICE_CREATE_SET: structures chained by Wine 11.18',
+                  '     * vkd3d/win32u when creating D3D12 devices; registered numerically',
+                  '     * so older registry snapshots cannot drop them. Sizes are the exact',
+                  '     * C++ layouts of (sType, pNext, N x VkBool32). */',
+                  '    if (static_cast<int64_t>(type) == 1000340000) { // VK_EXT_4444_formats',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000207000) { // VK_KHR_timeline_semaphore',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000028000) { // VK_EXT_transform_feedback',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000190002) { // VK_EXT_vertex_attribute_divisor',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000325000) { // VK_KHR_zero_initialize_workgroup_memory',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000161001) { // VK_EXT_descriptor_indexing',
+                  '        return sizeof(ForwardCompatibleTwentyBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000081001) { // VK_EXT_conditional_rendering',
+                  '        return sizeof(ForwardCompatibleTwoBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000102000) { // VK_EXT_depth_clip_enable',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000251000) { // VK_EXT_fragment_shader_interlock',
+                  '        return sizeof(ForwardCompatibleThreeBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000351000) { // VK_EXT_mutable_descriptor_type',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000286000) { // VK_EXT_robustness2',
+                  '        return sizeof(ForwardCompatibleThreeBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000276000) { // VK_EXT_shader_demote_to_helper_invocation',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000281000) { // VK_EXT_texel_buffer_alignment',
+                  '        return sizeof(ForwardCompatibleBooleanFeature);',
+                  '    }',
+                  '    if (static_cast<int64_t>(type) == 1000272000) { // VK_EXT_map_memory_placed',
+                  '        return sizeof(ForwardCompatibleThreeBooleanFeature);',
+                  '    }',
+              ]
+              anchor='#include "compatibility/device_pnext_sizes.inc"'
+              if anchor not in s:
+                  raise SystemExit('pnext sizes include not found')
+              s=s.replace(anchor, '\n'.join(extra_lines)+'\n'+anchor, 1)
+              p.write_text(s)
+          PY
+          cat >/tmp/aarch64-toolchain.cmake <<'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+          set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+          set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+          set(CMAKE_LIBRARY_ARCHITECTURE aarch64-linux-gnu)
+          EOF
+          export PKG_CONFIG_LIBDIR=/opt/khronos/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_PATH=
+          cmake -S /tmp/mali-wrapper -B /tmp/mali-wrapper-build \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/aarch64-toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCURRENT_ARCH=aarch64 \
+            -DBUILD_64BIT=ON -DBUILD_32BIT=OFF \
+            -DBUILD_HUD=OFF -DBUILD_TESTING=OFF -DINSTALL_ICDS=OFF \
+            -DBUILD_WSI_X11=ON -DBUILD_WSI_WAYLAND=OFF -DBUILD_WSI_HEADLESS=ON \
+            -DENABLE_WAYLAND_FIFO_PRESENTATION_THREAD=OFF \
+            -DMALI_DRIVER_PATH_64=libmali.so.0 \
+            -DVULKAN_REGISTRY_XML=/tmp/Vulkan-Headers/registry/vk.xml \
+            -DVULKAN_CORE_HEADER:FILEPATH=/opt/khronos/include/vulkan/vulkan_core.h
+          cmake --build /tmp/mali-wrapper-build -j4
+          echo "device_pnext_sizes_entries=$(grep -c 'if (type ==' /tmp/mali-wrapper-build/generated/compatibility/device_pnext_sizes.inc || true)"
+          echo "device_pnext_sizes_4444=$(grep -c 4444_FORMATS /tmp/mali-wrapper-build/generated/compatibility/device_pnext_sizes.inc || true)"
+          echo "device_pnext_sizes_timeline=$(grep -c TIMELINE_SEMAPHORE_FEATURES /tmp/mali-wrapper-build/generated/compatibility/device_pnext_sizes.inc || true)"
+
+      - name: Cross-build Xlib WSI probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PKG_CONFIG_LIBDIR=/opt/khronos/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          mkdir -p dist/test14/lib
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -DVK_USE_PLATFORM_XLIB_KHR \
+            -I/opt/khronos/include \
+            -o dist/test14/vk_wsi_xlib_probe scripts/vk_wsi_xlib_probe.c \
+            -L/usr/lib/aarch64-linux-gnu -lvulkan -lX11
+          wrapper=$(find /tmp/mali-wrapper-build -type f -name 'libmali_wrapper.so*' | head -1)
+          test -n "$wrapper"
+          cp -L "$wrapper" dist/test14/lib/libmali_wrapper.so
+          ln -s libmali_wrapper.so dist/test14/lib/libmali_wrapper.so.1
+          aarch64-linux-gnu-strip dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so
+          sha256sum dist/test14/lib/libmali_wrapper.so
+          aarch64-linux-gnu-readelf -W --dyn-syms dist/test14/lib/libmali_wrapper.so | grep -F 'vk_icdGetPhysicalDeviceProcAddr' >/dev/null
+          echo "wrapper_phydev_export=present"
+
+      - name: Collect ARM64 runtime dependency closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/test14/deps
+          python3 - <<'PY'
+          import os, re, subprocess, shutil
+          roots=['/usr/lib/aarch64-linux-gnu','/lib/aarch64-linux-gnu','/usr/aarch64-linux-gnu/lib']
+          queue=['dist/test14/vk_wsi_xlib_probe','dist/test14/lib/libmali_wrapper.so']
+          seen=set()
+          skip={'libc.so.6','libm.so.6','libdl.so.2','libpthread.so.0','librt.so.1','ld-linux-aarch64.so.1','libmali.so.0'}
+          def needed(path):
+              out=subprocess.check_output(['aarch64-linux-gnu-readelf','-d',path],text=True,errors='replace')
+              return re.findall(r'\(NEEDED\).*?\[(.*?)\]',out)
+          while queue:
+              p=queue.pop()
+              for n in needed(p):
+                  if n in skip or n in seen: continue
+                  src=next((os.path.join(r,n) for r in roots if os.path.exists(os.path.join(r,n))),None)
+                  if not src:
+                      print('MISSING_DEP',n,'needed_by',p)
+                      continue
+                  dst=os.path.join('dist/test14/deps',n)
+                  shutil.copy2(os.path.realpath(src),dst)
+                  seen.add(n); queue.append(dst)
+          print('COPIED_DEPS',*sorted(seen),sep='\n')
+          PY
+          aarch64-linux-gnu-strip dist/test14/deps/*.so* 2>/dev/null || true
+          file dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so dist/test14/deps/*
+
+      - name: Write manifest and validate ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >dist/test14/mali_wrapper_icd.json <<'EOF'
+          {
+            "file_format_version": "1.0.0",
+            "ICD": {
+              "library_path": "lib/libmali_wrapper.so",
+              "api_version": "1.3.276"
+            }
+          }
+          EOF
+          printf 'mode=mali-wrapper-xlib-wsi\nwrapper=zeyadadev/mali-vulkan-icd-wrapper\nforce_presenter=SHM\nmali_driver=libmali.so.0-via-LD_LIBRARY_PATH\n' >dist/test14/MANIFEST.txt
+          bash scripts/check-abi.sh dist/test14 2>&1 | tee dist/test14/abi-report.txt
+
+      - name: Build installable TSPS test14/test15 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH=dist/test14-device/animalwell
+          mkdir -p "$PATCH/runtime/test14"
+          cp -a dist/test14/. "$PATCH/runtime/test14/"
+          cp package/animalwell/test14-15-wsi.sh "$PATCH/test14-15-wsi.sh"
+          chmod +x "$PATCH/test14-15-wsi.sh" "$PATCH/runtime/test14/vk_wsi_xlib_probe"
+          cat >"$PATCH/TEST14-15-README.txt" <<'EOF'
+          ANIMAL WELL TSPS WSI field patch
+
+          Overlay the animalwell/ directory onto the existing port.
+
+          Run native WSI test first:
+            ./test14-15-wsi.sh test14
+
+          Only if test14 reports PASS_XLIB_SWAPCHAIN, run Wine integration:
+            ./test14-15-wsi.sh test15
+
+          Neither mode launches Animal Well itself.
+          Logs are written under animalwell/logs/.
+          EOF
+          (cd dist/test14-device && zip -qr ../Animal-Well-TSPS-test14-15-PATCH.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-15-PATCH.zip > Animal-Well-TSPS-test14-15-PATCH.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-15-PATCH.zip
+          cat dist/Animal-Well-TSPS-test14-15-PATCH.sha256
+
+      - name: Build delta-only Xorg fix patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test14-xorg-fix/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST14-15-XORG-FIX.txt" <<'EOF'
+          Delta over the previous test14/test15 patch.
+          Only the field harness changed.
+
+          This revision:
+          - auto-detects the proven Totono private Xorg at /mnt/UDISK/xorg/usr/lib/xorg/Xorg
+          - uses the known Xorg library roots under /mnt/UDISK/xorg-libs
+          - reuses Totono's totono-fb.conf when present
+          - falls back to the generated fbdev config/system Xorg search
+          - logs all selected Xorg paths
+          - exports SDL_VIDEODRIVER=x11 after DISPLAY becomes usable
+          EOF
+          (cd dist/test14-xorg-fix && zip -qr ../Animal-Well-TSPS-test14-15-XORG-FIX.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-15-XORG-FIX.zip > Animal-Well-TSPS-test14-15-XORG-FIX.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-15-XORG-FIX.zip
+          cat dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
+
+      - name: Build delta-only forced-SHM allocator fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test14-shm-alloc-fix/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          cat >"$D/TEST14-SHM-ALLOC-FIX.txt" <<'EOF'
+          Delta over the previous test14/test15 + Xorg-fix patches.
+
+          Only the Mali wrapper binary changed.
+
+          Fix:
+          - when WSI_X11_FORCE_SHM=1, skip wsialloc_new()
+          - the forced SHM path does not use DMA-BUF/wsialloc
+          - this avoids a false failure when /dev/dma_heap/system-uncached is absent
+          - DRI3/bridge behavior is unchanged and still requires wsialloc
+
+          Re-run:
+            ./test14-15-wsi.sh test14
+
+          Only run test15 after:
+            TEST14_RESULT=PASS_XLIB_SWAPCHAIN
+          EOF
+          (cd dist/test14-shm-alloc-fix && zip -qr ../Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip > Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip
+          cat dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
+
+      - name: Build delta-only SHM env/identity diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test14-shm-env-diag/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST14-SHM-ENV-DIAG.txt" <<'EOF'
+          Delta over the previous test14 patches.
+
+          Only the field harness changed.
+
+          This revision:
+          - logs WSI_X11_FORCE_SHM
+          - logs wrapper SHA-256 when sha256sum is available
+          - requires the new SHM-bypass marker in libmali_wrapper.so
+          - exits with code 22 if a stale wrapper is installed
+          - invokes the native probe through explicit env WSI_X11_FORCE_SHM=1
+            plus the exact VK_ICD_FILENAMES and LD_LIBRARY_PATH values
+
+          Re-run:
+            ./test14-15-wsi.sh test14
+          EOF
+          (cd dist/test14-shm-env-diag && zip -qr ../Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip > Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256)
+          unzip -l dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
+          cat dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
+
+      - name: Build delta-only persistent Wine/X11 harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-persistent-x11/animalwell
+          mkdir -p "$D"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cat >"$D/TEST15-PERSISTENT-X11-DELTA.txt" <<'EOF'
+          Delta over the previous test15 Box64 A/B patch.
+
+          Only the field harness changed. No runtime binaries are replaced.
+
+          Changes:
+          - always discovers the known Totono/private-Xorg ARM64 library roots,
+            even when DISPLAY=:1 already exists
+          - exposes those roots to Wine LD_LIBRARY_PATH, not only to Xorg
+          - enables Mali wrapper DEBUG logging
+          - keeps one wineserver alive across all staged smoke tests
+          - watchdog kills only the stuck smoke process, avoiding repeated
+            wineboot/explorer initialization between stages
+          - prefix sanity is retried and no longer aborts all diagnostics if
+            cmd.exe is killed after the template prefix already initialized
+          - removes the now-disproven Box64 main A/B from the field sequence
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-persistent-x11 && zip -qr ../Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip > Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
+
+      - name: Build delta-only Mali GIPA guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-mali-gipa-guard/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'vk_icdGetPhysicalDeviceProcAddr' "$D/runtime/test14/lib/libmali_wrapper.so"
+          cat >"$D/TEST15-MALI-GIPA-GUARD-DELTA.txt" <<'EOF'
+          Delta over test15 post-create .19.
+
+          Changed files only:
+          - test14-15-wsi.sh
+          - runtime/test14/lib/libmali_wrapper.so
+
+          Revision 2026-09-28.20:
+          - confirms the .19 crash is at
+              vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM
+          - prevents the TSPS r42 Mali driver GIPA from entering a small set of
+            newer ARM/NV vendor-specific physical-device queries that are not used
+            by ANIMAL WELL/VKD3D and should safely resolve to NULL
+          - emits AW_GIPA_GUARD_BLOCK for each blocked lookup
+          - keeps the existing .19 post-create proc scan so the next boundary is
+            visible immediately
+          - requires the patched wrapper marker before test15 proceeds
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-mali-gipa-guard && zip -qr ../Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip > Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
+
+      - name: Build delta-only wrapper device-create pNext fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-wrapper-pnext-fix/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'vk_icdGetPhysicalDeviceProcAddr' "$D/runtime/test14/lib/libmali_wrapper.so"
+          WSHA=$(sha256sum "$D/runtime/test14/lib/libmali_wrapper.so" | awk '{print $1}')
+          echo "wrapper_delta_sha256=$WSHA"
+          cat >"$D/TEST15-WRAPPER-PNEXT-FIX-DELTA.txt" <<EOF
+          Delta over test15 MALI-GIPA-GUARD .20.
+
+          Changed files only:
+          - test14-15-wsi.sh
+          - runtime/test14/lib/libmali_wrapper.so
+
+          Root cause fixed:
+          - D3D12CreateDevice failed with hr=0x80004005 because the wrapper's
+            DeviceCreateTransform::prepare() could not clone the vkd3d
+            features2 pNext chain:
+              unsupported VkDeviceCreateInfo pNext structure type 1000340000
+              (VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT)
+          - device_pnext_sizes.inc only covers structures named by the header
+            used at generation time; stale snapshots drop mid-2020+ types that
+            Wine 11.18 vkd3d/win32u chain on every D3D12CreateDevice.
+
+          Changes:
+          - wrapper build generates device_pnext_sizes.inc against the staged
+            current Vulkan headers (/opt/khronos/include) and additionally
+            registers the full vkd3d/win32u device-create pNext set
+            numerically as a fallback (AW_PNEXT_DEVICE_CREATE_SET)
+          - test14-15-wsi.sh: loader pick prefers the bundled 1.2.131 loader
+            (deps/); see the WRAPPER-PHYDEV-EXPORT delta
+          - test14-15-wsi.sh: accepts the pristine Wine 11.18 win32u.so; the
+            one-byte D3DKMT NOVULKAN patch is superseded by the loader fix
+          - test14-15-wsi.sh: adds +d3d12,+vkd3d Wine debug channels and
+            captures wrapper ERROR logs for smoke stages
+
+          Installed wrapper sha256: $WSHA
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-wrapper-pnext-fix && zip -qr ../Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256
+
+      - name: Build delta-only wrapper phys-dev-proc-addr export
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-wrapper-phydev-export/animalwell
+          mkdir -p "$D/runtime/test14/lib"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh"
+          cp dist/test14/lib/libmali_wrapper.so "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'AW_GIPA_GUARD_BLOCK' "$D/runtime/test14/lib/libmali_wrapper.so"
+          grep -aFq 'vk_icdGetPhysicalDeviceProcAddr' "$D/runtime/test14/lib/libmali_wrapper.so"
+          WSHA=$(sha256sum "$D/runtime/test14/lib/libmali_wrapper.so" | awk '{print $1}')
+          echo "wrapper_delta_sha256=$WSHA"
+          cat >"$D/TEST15-WRAPPER-PHYDEV-EXPORT-DELTA.txt" <<EOF
+          Delta over test15 WRAPPER-PNEXT-FIX.
+
+          Changed files only:
+          - test14-15-wsi.sh
+          - runtime/test14/lib/libmali_wrapper.so
+
+          Root cause fixed:
+          - Wine's win32u could not map VK_KHR_win32_surface: the firmware
+            loader (1.3.296) is built without X11 WSI and filters
+            VK_KHR_xcb_surface / VK_KHR_xlib_surface / VK_KHR_wayland_surface
+            out of the instance extension list, so vkd3d failed with
+            "Failed to create vkd3d instance" (E_FAIL).
+          - The bundled 1.2.131 loader exposes those extensions and the native
+            Xlib SHM swapchain probe passes, but it segfaulted as soon as Wine
+            probed any entry point missing from its own tables: the wrapper
+            negotiates ICD interface version 5 but never exported
+            vk_icdGetPhysicalDeviceProcAddr, and
+            loader_check_icds_for_phys_dev_ext_address (no NULL check in
+            1.2.131) jumped through a NULL pointer.
+
+          Changes:
+          - wrapper exports vk_icdGetPhysicalDeviceProcAddr; it delegates to the
+            guarded instance GIPA, so unsafe vendor queries still resolve to
+            NULL (AW_GIPA_GUARD_BLOCK) instead of entering the broken Mali
+            lookup
+          - test14-15-wsi.sh: prefers the bundled 1.2.131 loader (deps/),
+            falls back to /mnt/UDISK xorg-libs 1.2.162 and then the firmware
+            loader; fails closed when the wrapper lacks the
+            vk_icdGetPhysicalDeviceProcAddr export
+
+          Installed wrapper sha256: $WSHA
+
+          Run:
+            cd /mnt/SDCARD/Roms/PORTS/animalwell
+            ./test14-15-wsi.sh test14
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-wrapper-phydev-export && zip -qr ../Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip > Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test14-mali-wsi-wrapper
+          path: |
+            dist/test14
+            dist/Animal-Well-TSPS-test14-15-PATCH.zip
+            dist/Animal-Well-TSPS-test14-15-PATCH.sha256
+            dist/Animal-Well-TSPS-test14-15-XORG-FIX.zip
+            dist/Animal-Well-TSPS-test14-15-XORG-FIX.sha256
+            dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.zip
+            dist/Animal-Well-TSPS-test14-SHM-ALLOC-FIX.sha256
+            dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.zip
+            dist/Animal-Well-TSPS-test14-SHM-ENV-DIAG.sha256
+            dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.zip
+            dist/Animal-Well-TSPS-test15-PERSISTENT-X11-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.zip
+            dist/Animal-Well-TSPS-test15-MALI-GIPA-GUARD-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.zip
+            dist/Animal-Well-TSPS-test15-WRAPPER-PNEXT-FIX-DELTA.sha256
+            dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.zip
+            dist/Animal-Well-TSPS-test15-WRAPPER-PHYDEV-EXPORT-DELTA.sha256
+          if-no-files-found: error
+
+
+  build-test15-box64-main:
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      BOX64_TEST15_REF: c61543e47b8a9d1720742186bfea205ad8a7ed35
+      MAX_GLIBC: '2.31'
+      MAX_GLIBCXX: '3.4.28'
+    steps:
+      - name: Install Focal build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends             ca-certificates git make python3 python3-pip             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu binutils libc6-dev-arm64-cross             file zip unzip
+          python3 -m pip install --no-cache-dir 'cmake==3.27.9'
+
+      - uses: actions/checkout@v4
+
+      - name: Build pinned post-v0.4.4 Box64 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/ptitSeb/box64.git /tmp/box64-main
+          git -C /tmp/box64-main checkout -q "$BOX64_TEST15_REF"
+          cat >/tmp/box64-toolchain.cmake <<'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+          set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+          EOF
+          /usr/local/bin/cmake -S /tmp/box64-main -B /tmp/box64-main-build             -DCMAKE_TOOLCHAIN_FILE=/tmp/box64-toolchain.cmake             -DARM64=1 -DBOX32=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          /usr/local/bin/cmake --build /tmp/box64-main-build -j4
+          mkdir -p dist/test15-box64-main
+          cp /tmp/box64-main-build/box64 dist/test15-box64-main/box64-test15-main
+          aarch64-linux-gnu-strip dist/test15-box64-main/box64-test15-main
+          git clone -q https://github.com/ptitSeb/box64.git /tmp/box64-gipa
+          git -C /tmp/box64-gipa checkout -q "$BOX64_TEST15_REF"
+          python3 scripts/patch_box64_vk_gipa.py /tmp/box64-gipa/src/wrapped/wrappedvulkan.c
+          /usr/local/bin/cmake -S /tmp/box64-gipa -B /tmp/box64-gipa-build -DCMAKE_TOOLCHAIN_FILE=/tmp/box64-toolchain.cmake -DARM64=1 -DBOX32=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          /usr/local/bin/cmake --build /tmp/box64-gipa-build -j4
+          cp /tmp/box64-gipa-build/box64 dist/test15-box64-main/box64-test15-gipa
+          aarch64-linux-gnu-strip dist/test15-box64-main/box64-test15-gipa
+          strings dist/test15-box64-main/box64-test15-gipa | grep -F 'BOX64_VULKAN_GIPA_BLOCK'
+          bash scripts/check-abi.sh dist/test15-box64-main/box64-test15-gipa
+          file dist/test15-box64-main/box64-test15-main dist/test15-box64-main/box64-test15-gipa
+          strings dist/test15-box64-main/box64-test15-main | grep -F 'BOX64_MMAP32' | head -1 || true
+
+      - name: Validate Box64 candidate ABI
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-abi.sh dist/test15-box64-main 2>&1 | tee dist/test15-box64-main/abi-report.txt
+          aarch64-linux-gnu-readelf --version-info dist/test15-box64-main/box64-test15-main             > dist/test15-box64-main/version-info.txt 2>&1 || true
+
+      - name: Build delta-only Box64 A/B patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          D=dist/test15-box64-main-delta/animalwell
+          mkdir -p "$D/runtime/box64"
+          cp dist/test15-box64-main/box64-test15-main "$D/runtime/box64/box64-test15-main"
+          cp dist/test15-box64-main/box64-test15-gipa "$D/runtime/box64/box64-test15-gipa"
+          cp package/animalwell/test14-15-wsi.sh "$D/test14-15-wsi.sh"
+          chmod +x "$D/test14-15-wsi.sh" "$D/runtime/box64/box64-test15-main" "$D/runtime/box64/box64-test15-gipa"
+          cat >"$D/TEST15-BOX64-MAIN-DELTA.txt" <<'EOF'
+          Delta over the previous test15 staged diagnostics.
+
+          Adds two separate Box64 candidates built from:
+            c61543e47b8a9d1720742186bfea205ad8a7ed35
+          (post-v0.4.4 main, 2026-09-27)
+
+          - box64-test15-main: upstream candidate, not selected for production
+          - box64-test15-gipa: same source plus an opt-in denylist for the
+            observed crashing query and the Mali wrapper's unsupported vendor
+            GIPA entries: vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM,
+            vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM,
+            vkGetPhysicalDeviceExternalTensorPropertiesARM,
+            vkGetPhysicalDeviceQueueFamilyDataGraphPropertiesARM,
+            vkGetPhysicalDeviceQueueFamilyDataGraphProcessingEnginePropertiesARM,
+            vkGetPhysicalDeviceOpticalFlowImageFormatsNV,
+            vkGetPhysicalDeviceCooperativeVectorPropertiesNV,
+            vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV,
+            vkGetPhysicalDeviceCooperativeMatrixPropertiesNV, and
+            vkGetPhysicalDeviceCalibrateableTimeDomainsKHR. The opt-in is used
+            only for the isolated post-create diagnostic with
+            BOX64_VULKAN_SKIP_UNSAFE_GIPA=1.
+
+          Production runtime/box64/box64 is NOT replaced. The post-create test
+          uses the test-only candidate; all earlier probes keep the installed
+          baseline. A PASS only clears the GIPA bootstrap boundary; it is not
+          evidence of a visible frame or stable game launch.
+
+          Run:
+            ./test14-15-wsi.sh test15
+          EOF
+          (cd dist/test15-box64-main-delta && zip -qr ../Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip animalwell)
+          (cd dist && sha256sum Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip > Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.sha256)
+          unzip -l dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip
+          cat dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: animalwell-test15-box64-main
+          path: |
+            dist/test15-box64-main
+            dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.zip
+            dist/Animal-Well-TSPS-test15-BOX64-MAIN-DELTA.sha256
+          if-no-files-found: error

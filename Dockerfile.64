@@ -1,0 +1,25 @@
+FROM --platform=linux/amd64 ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Keep the complete build root on the same conservative ABI baseline used by
+# SpruceOS 64-bit builds. ARM64 host ELFs are cross-built against Focal/glibc
+# 2.31; x86-64 guest helper ELFs are copied from this same Focal image.
+RUN printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates git curl xz-utils zstd zip make cmake \
+      python3 python3-pip file binutils \
+      gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross \
+      qemu-user gcc-mingw-w64-x86-64 libvulkan-dev \
+      libunwind8 libstdc++6 && \
+    python3 -m pip install --no-cache-dir cmake==3.27.9 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY . /src
+WORKDIR /src
+
+ENV MAX_GLIBC=2.31
+ENV MAX_GLIBCXX=3.4.28
+
+ENTRYPOINT ["bash", "scripts/build_runtime.sh"]

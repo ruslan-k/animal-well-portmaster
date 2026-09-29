@@ -1,0 +1,9 @@
+.work/
+dist/
+package/animalwell/prefix/
+package/animalwell/cache/
+package/animalwell/logs/*
+package/animalwell/game/Animal Well.exe
+package/animalwell/game/steam_api64.dll
+package/animalwell/game/steam_appid.txt
+__pycache__/
