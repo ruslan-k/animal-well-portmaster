@@ -1177,7 +1177,7 @@ jobs:
           ln -s libmali_wrapper.so dist/test14/lib/libmali_wrapper.so.1
           aarch64-linux-gnu-strip dist/test14/vk_wsi_xlib_probe dist/test14/lib/libmali_wrapper.so
           sha256sum dist/test14/lib/libmali_wrapper.so
-          aarch64-linux-gnu-readelf -W --dyn-syms dist/test14/lib/libmali_wrapper.so | grep -Fq 'vk_icdGetPhysicalDeviceProcAddr'
+          aarch64-linux-gnu-readelf -W --dyn-syms dist/test14/lib/libmali_wrapper.so | grep -F 'vk_icdGetPhysicalDeviceProcAddr' >/dev/null
           echo "wrapper_phydev_export=present"
 
       - name: Collect ARM64 runtime dependency closure

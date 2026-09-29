@@ -116,6 +116,19 @@ for f in system.reg user.reg userdef.reg .update-timestamp; do
   [ -f "$PFXSRC/$f" ] || { echo "Wine prefix template missing $f" >&2; exit 5; }
   cp -a "$PFXSRC/$f" "$PFXTPL/$f"
 done
+# Bootstrap display device for the box64 desktop race. The desktop process
+# (explorer) registers Video\{random-guid}\0000\GraphicsDriver at runtime and
+# publishes the guid on the desktop window; other processes read that property
+# to find the driver. Under box64 the first GUI process often needs the driver
+# before explorer finishes, falls back to the null guid, finds no key and is
+# stuck with the null driver forever (nodrv: "Application tried to create a
+# window, but no driver could be loaded."). Pre-seed the exact null-guid
+# fallback path with the X11 driver so the race is harmless.
+cat >>"$PFXTPL/system.reg" <<'EOF'
+
+[System\\ControlSet001\\Control\\Video\\{00000000-0000-0000-0000-000000000000}\\0000] 1790555439
+"GraphicsDriver"="winex11.drv"
+EOF
 printf 'wine=%s\nlayout=tmp-symlink-prefix-v1\n' "$WINE_VER" >"$PFXTPL/MANIFEST"
 unset WINEPREFIX WINEARCH WINEDEBUG WINEDLLOVERRIDES
 rm -rf "$PFXSRC"
