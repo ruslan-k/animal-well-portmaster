@@ -20,6 +20,7 @@ class Box64GipaPatchTests(unittest.TestCase):
         self.assertIn('getenv("BOX64_VULKAN_SKIP_UNSAFE_GIPA")', result)
         self.assertIn('strcmp(rname, "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM") == 0', result)
         self.assertIn('strcmp(rname, "vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM") == 0', result)
+        self.assertIn('strcmp(rname, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR") == 0', result)
         self.assertLess(result.index("BOX64_VULKAN_GIPA_BLOCK"), result.index("getprocaddr ="))
         self.assertIn('return NULL;', result)
 

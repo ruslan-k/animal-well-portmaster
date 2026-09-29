@@ -1382,9 +1382,12 @@ jobs:
           (post-v0.4.4 main, 2026-09-27)
 
           - box64-test15-main: upstream candidate, not selected for production
-          - box64-test15-gipa: same source plus an opt-in guard for one Mali
-            driver GIPA lookup that was observed to indirect-call NULL inside
-            the native Vulkan loader. It is enabled only for the isolated
+          - box64-test15-gipa: same source plus an opt-in guard for the observed Mali
+            GIPA queries that crash the TSPS resolver:
+            vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM,
+            vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM, and
+            vkGetPhysicalDeviceCalibrateableTimeDomainsKHR. It returns NULL
+            before forwarding those names and is enabled only for the isolated
             post-create diagnostic with BOX64_VULKAN_SKIP_UNSAFE_GIPA=1.
 
           Production runtime/box64/box64 is NOT replaced. The post-create test

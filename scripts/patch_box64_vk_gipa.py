@@ -11,7 +11,8 @@ GUARD = '''    const char* rname = (const char*)name;
     const char* skip_unsafe_gipa = getenv("BOX64_VULKAN_SKIP_UNSAFE_GIPA");
     if (skip_unsafe_gipa && strcmp(skip_unsafe_gipa, "1") == 0 && rname &&
         (strcmp(rname, "vkEnumeratePhysicalDeviceQueueFamilyPerformanceCountersByRegionARM") == 0 ||
-         strcmp(rname, "vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM") == 0)) {
+         strcmp(rname, "vkEnumeratePhysicalDeviceShaderInstrumentationMetricsARM") == 0 ||
+         strcmp(rname, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR") == 0)) {
         fprintf(stderr, "BOX64_VULKAN_GIPA_BLOCK name=%s\\n", rname);
         return NULL;
     }
