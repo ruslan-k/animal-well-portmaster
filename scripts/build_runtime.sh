@@ -4,8 +4,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-"$ROOT/.work"}
 OUT=${OUT:-"$ROOT/dist"}
 BOX64_REF=${BOX64_REF:-v0.4.4}
-WINE_VER=${WINE_VER:-11.18}
-WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba}
+WINE_VER=${WINE_VER:-10.0}
+# The verified runtime is wine 10.0 (see docs/WINE-10-AND-MEMORY-2026-09-30.md:
+# wine 11.x's client-surface window model is what broke geometry on this fbdev X).
+# Each pinned version carries its own archive sha256; pass WINE_SHA for anything else.
+case "$WINE_VER" in
+  10.0)  WINE_SHA=${WINE_SHA:-aeebbbf239e548f0136f1cd72a2e109dd9a572a8f703da3c09fa40d74d5c255f} ;;
+  11.18) WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba} ;;
+  *)     : "${WINE_SHA:?WINE_SHA must be supplied for unpinned WINE_VER=$WINE_VER}" ;;
+esac
 JOBS=${JOBS:-2}
 
 rm -rf "$WORK" "$OUT"
@@ -65,35 +72,72 @@ cp -a "$WD"/. "$RT/wine/"
 # non-fatal and still allocates/returns an adapter handle. This leaves the
 # process-wide Vulkan loader fully available to VKD3D/D3D12 itself.
 WIN32U="$RT/wine/lib/wine/x86_64-unix/win32u.so"
-WIN32U_ORIG_SHA=ae1d4166fda55ab9a9e0ac0ce2cbb93f425b2f3fdcbbb92e293c68629ed30ba4
-WIN32U_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
-echo "$WIN32U_ORIG_SHA  $WIN32U" | sha256sum -c -
+# Per-version pins: only the verified 11.18 build is checked against fixed
+# hashes/address/prologue.  Other versions (e.g. WINE_VER=10.0, where the
+# client-surface window model that breaks on this fbdev X does not exist) are
+# patched dynamically and the values actually observed are recorded in the
+# manifest written below.
+case "$WINE_VER" in
+  11.18)
+    WIN32U_ORIG_SHA=ae1d4166fda55ab9a9e0ac0ce2cbb93f425b2f3fdcbbb92e293c68629ed30ba4
+    WIN32U_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
+    WIN32U_EXPECT_SYM=0000000000044940
+    WIN32U_EXPECT_PROLOGUE=4883ec08
+    ;;
+  10.0)
+    # pinned from the verified runtime (lib/wine/x86_64-unix/win32u.so of the
+    # Kron4ek 10.0 wow64 archive pinned above)
+    WIN32U_ORIG_SHA=958c182de9dc8d4dcdf9a4391d791391b35ecf3ebb1a121901a9e1ff7cedd6b6
+    WIN32U_PATCH_SHA=df5d4d1a523c7b5539fb9b2d079149e187137aad614116e7e58527e0cac2d780
+    WIN32U_EXPECT_SYM=000000000002c2d0
+    WIN32U_EXPECT_PROLOGUE=55660fef
+    ;;
+  *)
+    WIN32U_ORIG_SHA=${WIN32U_ORIG_SHA:-}
+    WIN32U_PATCH_SHA=
+    WIN32U_EXPECT_SYM=
+    WIN32U_EXPECT_PROLOGUE=
+    ;;
+esac
+[ -n "$WIN32U_ORIG_SHA" ] && echo "$WIN32U_ORIG_SHA  $WIN32U" | sha256sum -c -
+WIN32U_ORIG_OBSERVED=$(sha256sum "$WIN32U" | awk '{print $1}')
 WIN32U_SYM=$(nm -an "$WIN32U" | awk '$3 == "d3dkmt_init_vulkan" && !found {print $1; found=1}')
-[ "$WIN32U_SYM" = "0000000000044940" ] || {
-  echo "unexpected d3dkmt_init_vulkan symbol address: $WIN32U_SYM" >&2
-  exit 6
-}
-python3 - "$WIN32U" "$WIN32U_SYM" <<'PY'
+[ -n "$WIN32U_SYM" ] || { echo "d3dkmt_init_vulkan not found in $WIN32U" >&2; exit 6; }
+if [ -n "$WIN32U_EXPECT_SYM" ]; then
+  [ "$WIN32U_SYM" = "$WIN32U_EXPECT_SYM" ] || {
+    echo "unexpected d3dkmt_init_vulkan symbol address: $WIN32U_SYM" >&2
+    exit 6
+  }
+fi
+python3 - "$WIN32U" "$WIN32U_SYM" "$WIN32U_EXPECT_PROLOGUE" <<'PY'
 import sys
-path, sym = sys.argv[1], int(sys.argv[2], 16)
+path, sym, expect = sys.argv[1], int(sys.argv[2], 16), sys.argv[3]
 with open(path, "r+b") as f:
     f.seek(sym)
     old = f.read(4)
-    if old != bytes.fromhex("4883ec08"):
-        raise SystemExit(f"unexpected d3dkmt_init_vulkan prologue: {old.hex()}")
+    if expect:
+        if old.hex() != expect:
+            raise SystemExit(f"unexpected d3dkmt_init_vulkan prologue: {old.hex()}")
+    elif old[0] not in (0x48, 0x55):  # x86-64 frame setup sanity check
+        raise SystemExit(f"suspicious d3dkmt_init_vulkan prologue: {old.hex()}")
     f.seek(sym)
     f.write(b"\xc3")
 PY
-echo "$WIN32U_PATCH_SHA  $WIN32U" | sha256sum -c -
+if [ -z "$WIN32U_PATCH_SHA" ]; then
+  WIN32U_PATCH_SHA=$(sha256sum "$WIN32U" | awk '{print $1}')
+  echo "win32u patched dynamically for wine $WINE_VER: $WIN32U_ORIG_OBSERVED -> $WIN32U_PATCH_SHA"
+else
+  echo "$WIN32U_PATCH_SHA  $WIN32U" | sha256sum -c -
+fi
 mkdir -p "$RT/wine-patches"
 cat >"$RT/wine-patches/D3DKMT-NOVULKAN.txt" <<EOF
 wine=$WINE_VER
 file=lib/wine/x86_64-unix/win32u.so
 symbol=d3dkmt_init_vulkan
-symbol_address=0x44940
-original_sha256=$WIN32U_ORIG_SHA
+symbol_address=0x$(echo "$WIN32U_SYM" | sed 's/^0*//')
+original_sha256=$WIN32U_ORIG_OBSERVED
 patched_sha256=$WIN32U_PATCH_SHA
-patch=first byte 0x48 -> 0xc3 (ret)
+patch=first byte -> 0xc3 (ret)
 reason=avoid Box64 crash in Wine D3DKMT-internal Vulkan instance; VKD3D Vulkan remains enabled
 EOF
 

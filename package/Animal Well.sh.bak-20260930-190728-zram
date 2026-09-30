@@ -174,13 +174,6 @@ setup_vulkan_env() {
     rm -f /tmp/animalwell-loader/libvulkan.so.1 2>/dev/null || true
     mkdir -p /tmp/animalwell-loader
     LOADER_PICK=
-    # AW_VK_LOADER=<path> forces a specific loader (A/B after the winevulkan
-    # assertion crash at loader.c:668); unset = the bundled 1.2.131 pick below.
-    if [ -n "${AW_VK_LOADER:-}" ] && [ -e "${AW_VK_LOADER}" ]; then
-        ln -sf "${AW_VK_LOADER}" /tmp/animalwell-loader/libvulkan.so.1
-        LOADER_PICK=/tmp/animalwell-loader
-        log "loader_source=$AW_VK_LOADER (forced via AW_VK_LOADER)"
-    else
     for cand in "$T14/deps/libvulkan.so.1" \
         /mnt/UDISK/xorg-libs/usr/lib/aarch64-linux-gnu/libvulkan.so.1 \
         /usr/lib/libvulkan.so.1; do
@@ -191,7 +184,6 @@ setup_vulkan_env() {
             break
         fi
     done
-    fi
 
     mkdir -p "$MALIDIR"
     MALI_SO=$(ls -1 /usr/lib/libmali.so.0* 2>/dev/null | head -1 || true)
@@ -208,11 +200,11 @@ setup_vulkan_env() {
     export MALI_WRAPPER_LOG_LEVEL=0
     export MALI_WRAPPER_LOG_CONSOLE=0
     export MALI_WRAPPER_LOG_FILE="$LOGDIR/aw-wrapper.log"
-    export WINE_D3D_CONFIG="renderer=${AW_D3D_RENDERER:-no3d}"
+    export WINE_D3D_CONFIG="renderer=no3d"
     # Belt: every Wine child must see :1 even if a stray unset happened.
     export DISPLAY="${DISPLAY:-:1}"
     export LD_LIBRARY_PATH="${LOADER_PICK:+$LOADER_PICK:}$T14/deps:$T14/lib:$MALIDIR${XORG_LD_PATH:+:$XORG_LD_PATH}:/mnt/SDCARD/Persistent/portmaster/lib:/mnt/SDCARD/spruce/flip/lib:/usr/trimui/lib:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    log "vulkan_env: loader_pick=${LOADER_PICK:-<bundled>} icd=$ICDJSON mali=${MALI_SO:-<none>} wsi_force_shm=1 renderer=${AW_D3D_RENDERER:-no3d}"
+    log "vulkan_env: loader_pick=${LOADER_PICK:-<bundled>} icd=$ICDJSON mali=${MALI_SO:-<none>} wsi_force_shm=1 renderer=no3d"
 }
 
 harden_prefix_for_wine() {
@@ -264,7 +256,7 @@ seed_display_session() {
     [ -x "$SSSMK" ] || { log "seed: no smoke binary in prefix, skip"; return 0; }
 
     log "--- display baseline (real env, keep going regardless) ---"
-    run_watchdog 15 env WINE_D3D_CONFIG=renderer=${AW_D3D_RENDERER:-no3d} VKD3D_DEBUG=info VKD3D_LOG_FILE="$LOGDIR/vkd3d-seed0.log" "$BOX64" "$WINE" "$SSSMK" display-kmt >"$LOGDIR/seed-display0.log" 2>&1
+    run_watchdog 15 env WINE_D3D_CONFIG=renderer=no3d VKD3D_DEBUG=info VKD3D_LOG_FILE="$LOGDIR/vkd3d-seed0.log" "$BOX64" "$WINE" "$SSSMK" display-kmt >"$LOGDIR/seed-display0.log" 2>&1
     log "baseline rc=$? (expected to wedge/fail)"
     "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
     sleep 1
@@ -280,7 +272,7 @@ seed_display_session() {
         export VK_ICD_FILENAMES=/tmp/animalwell-no-vulkan-icd-does-not-exist.json
         export LD_LIBRARY_PATH="$NO_GL_DIR:$LD_LIBRARY_PATH"
         export WINEDEBUG=-all
-        export WINE_D3D_CONFIG=renderer=${AW_D3D_RENDERER:-no3d}
+        export WINE_D3D_CONFIG=renderer=no3d
         export MALI_WRAPPER_LOG_CATEGORY=wrapper
         export MALI_WRAPPER_LOG_LEVEL=0
         export MALI_WRAPPER_LOG_CONSOLE=0
@@ -293,7 +285,7 @@ seed_display_session() {
     rm -rf "$NO_GL_DIR"
 
     log "--- display same-server (real GPU env) ---"
-    env WINE_D3D_CONFIG=renderer=${AW_D3D_RENDERER:-no3d} VKD3D_DEBUG=info VKD3D_LOG_FILE="$LOGDIR/vkd3d-seed2.log" "$BOX64" "$WINE" "$SSSMK" display-kmt >"$LOGDIR/seed-display2.log" 2>&1 &
+    env WINE_D3D_CONFIG=renderer=no3d VKD3D_DEBUG=info VKD3D_LOG_FILE="$LOGDIR/vkd3d-seed2.log" "$BOX64" "$WINE" "$SSSMK" display-kmt >"$LOGDIR/seed-display2.log" 2>&1 &
     sp2=$!
     ( sleep 40; kill -TERM "$sp2" 2>/dev/null; sleep 2; kill -KILL "$sp2" 2>/dev/null ) &
     wd2=$!
@@ -675,56 +667,6 @@ fi
 
 setup_prefix || exit 18
 
-# PR review #2: a warm DynaCache restores translated blocks from earlier sessions
-# into live mappings; DC0/DC1/DC2 are run by flipping AW_BOX64_DYNACACHE.
-export BOX64_DYNACACHE="${AW_BOX64_DYNACACHE:-1}"
-export BOX64_LOG=${BOX64_LOG:-1}
-# box64 refuses to launch winedbg by default ("winedbg detected, not launching
-# it!"), so wine's unhandled-exception handler waits forever for a debugger that
-# never attaches and the process deadlocks (a crashed thread keeps holding the
-# heap lock). BOX64_WINEDBG=1 lets box64 launch winedbg; the crash then produces
-# a real backtrace and the process exits cleanly instead of hanging.
-export BOX64_WINEDBG=1
-# Memory-model hardening: OFF by default for speed. The wild-pointer crashes
-# that motivated it were traced to the FAudio 26.09 out-of-bounds mix (fixed by
-# the xaudio2_9 swap); with that root gone the extra atomics only cost frames.
-# AW_HARDEN=1 re-enables the safe set (STRONGMEM=2/BIGBLOCK=1/CALLRET=0 were
-# bisected out: each made even `wine cmd /c ver` die with SIGKILL at exit).
-if [ -n "${AW_HARDEN:-}" ]; then
-    export BOX64_DYNAREC_STRONGMEM=${BOX64_DYNAREC_STRONGMEM:-1}
-    export BOX64_DYNAREC_ALIGNED_ATOMICS=${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}
-    export BOX64_DYNAREC_SAFEFLAGS=${BOX64_DYNAREC_SAFEFLAGS:-1}
-    export BOX64_DYNAREC_BLEEDING_EDGE=${BOX64_DYNAREC_BLEEDING_EDGE:-0}
-fi
-export BOX64_SHOWSEGV=1
-export BOX64_LD_LIBRARY_PATH="$RT/box64/x64lib:$RT/wine/lib:$RT/wine/lib64${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
-export XDG_CACHE_HOME="$CACHE"
-export VKD3D_SHADER_CACHE_PATH="$CACHE/vkd3d"
-export WINEDEBUG=${WINEDEBUG:--all}
-
-# --- headless prefix warm-up (agent 2026-09-30) ------------------------------
-# The staged prefix is lightweight and uninitialised, so the first `wine` call
-# starts wineboot, whose "The Wine configuration is being updated" dialog is
-# MODAL: on a handheld nobody can click it and the port hangs there with a black
-# screen.  Warm the prefix with DISPLAY cleared (a win32 window cannot appear
-# without a display, so no dialog), then persist the stamp/registry into the
-# template so the next launch starts already warm.  AW_PREFIX_WARM=0 disables.
-if [ "${AW_PREFIX_WARM:-1}" = 1 ]; then
-    _warm_log="$LOGDIR/prefix-warm.log"
-    log "prefix: warming headlessly (wineboot -u without DISPLAY)"
-    ( unset DISPLAY
-      WINEPREFIX="$PFX" WINEARCH=win64 \
-      WINEDLLOVERRIDES="mscoree=;mshtml=;winemenubuilder.exe=disabled" \
-      "$BOX64" "$RT/wine/bin/wine" wineboot -u >>"$_warm_log" 2>&1 ) || log "WARNING prefix warm-up returned non-zero (see $_warm_log)"
-    if [ -f "$PFX/.update-timestamp" ]; then
-        cp -f "$PFX/.update-timestamp" "$PFXTPL/.update-timestamp" 2>/dev/null && log "prefix: template stamp updated ($(cat "$PFX/.update-timestamp" 2>/dev/null | tr -d '\r\n'))"
-    fi
-    [ -f "$PFX/user.reg" ] && cp -f "$PFX/user.reg" "$PFXTPL/user.reg" 2>/dev/null
-    log "prefix: warm-up done"
-fi
-
-
-
 # Never let wineboot offer the Mono/Gecko installers (they are modal dialogs on
 # a handheld).  Both the env form and the prefix registry carry the overrides:
 # wineboot runs before the port's own WINEDLLOVERRIDES branch would set them.
@@ -755,6 +697,30 @@ export WINEESYNC=0
 export WINEFSYNC=0
 export BOX64_NOBANNER=1
 export BOX64_DYNAREC=1
+export BOX64_DYNACACHE=1
+export BOX64_LOG=${BOX64_LOG:-1}
+# box64 refuses to launch winedbg by default ("winedbg detected, not launching
+# it!"), so wine's unhandled-exception handler waits forever for a debugger that
+# never attaches and the process deadlocks (a crashed thread keeps holding the
+# heap lock). BOX64_WINEDBG=1 lets box64 launch winedbg; the crash then produces
+# a real backtrace and the process exits cleanly instead of hanging.
+export BOX64_WINEDBG=1
+# Memory-model hardening: OFF by default for speed. The wild-pointer crashes
+# that motivated it were traced to the FAudio 26.09 out-of-bounds mix (fixed by
+# the xaudio2_9 swap); with that root gone the extra atomics only cost frames.
+# AW_HARDEN=1 re-enables the safe set (STRONGMEM=2/BIGBLOCK=1/CALLRET=0 were
+# bisected out: each made even `wine cmd /c ver` die with SIGKILL at exit).
+if [ -n "${AW_HARDEN:-}" ]; then
+    export BOX64_DYNAREC_STRONGMEM=${BOX64_DYNAREC_STRONGMEM:-1}
+    export BOX64_DYNAREC_ALIGNED_ATOMICS=${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}
+    export BOX64_DYNAREC_SAFEFLAGS=${BOX64_DYNAREC_SAFEFLAGS:-1}
+    export BOX64_DYNAREC_BLEEDING_EDGE=${BOX64_DYNAREC_BLEEDING_EDGE:-0}
+fi
+export BOX64_SHOWSEGV=1
+export BOX64_LD_LIBRARY_PATH="$RT/box64/x64lib:$RT/wine/lib:$RT/wine/lib64${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+export XDG_CACHE_HOME="$CACHE"
+export VKD3D_SHADER_CACHE_PATH="$CACHE/vkd3d"
+export WINEDEBUG=${WINEDEBUG:--all}
 
 log "--- cpu preset + swap priorities ---"
 cpu_preset_apply
@@ -928,15 +894,6 @@ if [ "${AW_KILL_WINE_SERVICES:-1}" = 1 ]; then
         done
     ) &
 fi
-# The prefix was warmed above with the full box64 environment, so the game's own
-# run does not need wineboot; leaving it enabled only re-raises its modal progress
-# window on the handheld's screen.  (The warm-up still calls wineboot directly -
-# this override is exported after it.)  AW_SKIP_WINEBOOT=0 re-enables it.
-if [ "${AW_SKIP_WINEBOOT:-0}" = 1 ]; then
-    export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};wineboot.exe=d"
-    log "prefix: wineboot disabled for the game run (prefix is warm)"
-fi
-
 # --- controls: TRIMUI pad -> gptokeyb -> uinput "Fake Keyboard" -> Xorg evdev --
 # wine's own pad path (winebus/XInput) does not start under box64 on this device,
 # so the game is driven through its keyboard input.  The mapping lives in
@@ -952,41 +909,10 @@ if [ "${AW_GPTOKEYB:-1}" = 1 ]; then
     fi
 fi
 
-# --- compressed swap: keep the hot pages in RAM (memory A/B, PR review) -------
-# Measured 2026-09-30: the game holds ~200 MB resident + ~520 MB swapped and the
-# mandatory explorer.exe another ~100 MB; at the stock 493 MB zram the device
-# overflows the compressed swap and pages to the slow UDISK/SD files, which shows
-# up as FPS dips and audio dropouts.  Ensure zram0 is at least AW_ZRAM_SIZE
-# (default 1 GiB) and raise the watermark floor so kswapd acts early.
-if [ "${AW_ZRAM_SIZE:-$((1024*1024*1024))}" -gt "$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)" ] 2>/dev/null; then
-    _OLD_ZRAM=$(cat /sys/block/zram0/disksize 2>/dev/null)
-    log "memory: growing zram0 $_OLD_ZRAM -> ${AW_ZRAM_SIZE:-1073741824}"
-    if swapoff /dev/zram0 2>/dev/null && echo 1 > /sys/block/zram0/reset 2>/dev/null \
-       && echo "${AW_ZRAM_SIZE:-1073741824}" > /sys/block/zram0/disksize 2>/dev/null \
-       && mkswap /dev/zram0 >/dev/null 2>&1 && swapon -p 200 /dev/zram0 2>/dev/null; then
-        log "memory: zram0 now $(cat /sys/block/zram0/disksize) bytes at prio 200"
-    else
-        log "memory: zram resize failed - restoring"
-        swapoff /dev/zram0 2>/dev/null || true
-        echo 1 > /sys/block/zram0/reset 2>/dev/null || true
-        [ -n "$_OLD_ZRAM" ] && echo "$_OLD_ZRAM" > /sys/block/zram0/disksize 2>/dev/null
-        mkswap /dev/zram0 >/dev/null 2>&1 || true
-        swapon -p 200 /dev/zram0 2>/dev/null || true
-    fi
-fi
-[ "$(cat /proc/sys/vm/min_free_kbytes 2>/dev/null || echo 0)" -lt 32768 ] 2>/dev/null && sysctl -w vm.min_free_kbytes=32768 >/dev/null 2>&1
-[ "$(cat /proc/sys/vm/swappiness 2>/dev/null || echo 0)" -lt 150 ] 2>/dev/null && sysctl -w vm.swappiness=150 >/dev/null 2>&1
-
 cd "$GAME"
 set +e
-if [ "${AW_DEBUG_BT:-0}" = 1 ]; then
-    log "debug: launching under winedbg for a crash backtrace"
-    "$BOX64" "$WINE" winedbg --command "run; bt all; info threads; q" "$EXE"
-    RC=$?
-else
-    "$BOX64" "$WINE" "$EXE"
-    RC=$?
-fi
+"$BOX64" "$WINE" "$EXE"
+RC=$?
 set -e 2>/dev/null || true
 log "game_exit_code=$RC"
 
