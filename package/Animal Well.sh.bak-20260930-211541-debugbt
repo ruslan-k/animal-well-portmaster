@@ -979,14 +979,8 @@ fi
 
 cd "$GAME"
 set +e
-if [ "${AW_DEBUG_BT:-0}" = 1 ]; then
-    log "debug: launching under winedbg for a crash backtrace"
-    "$BOX64" "$WINE" winedbg --command "run; bt all; info threads; q" "$EXE"
-    RC=$?
-else
-    "$BOX64" "$WINE" "$EXE"
-    RC=$?
-fi
+"$BOX64" "$WINE" "$EXE"
+RC=$?
 set -e 2>/dev/null || true
 log "game_exit_code=$RC"
 
