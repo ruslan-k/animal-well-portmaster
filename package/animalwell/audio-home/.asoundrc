@@ -1,16 +1,9 @@
-# agent 2026-09-30: direct hw:0,0 (was dmix) - the skill measured a dmix XRun
-# storm on TSPS.  plug keeps format/rate conversion so winealsa can open
-# (48 kHz stereo -> 96 kHz S32_LE).  Restore the .bak-* file to go back to dmix.
-pcm.!default {
-    type plug
-    slave {
-        pcm "hw:0,0"
-        format S32_LE
-        rate 96000
-    }
-}
-
-ctl.!default {
-    type hw
-    card 0
-}
+# TSPS: the sound card is shared - MainUI and the game both want the PCM.
+# A default of `hw:0,0` cannot be opened by a second client, and Wine's XAudio2 then
+# faults inside FAudio voice creation (xaudio2_9.dll +0xd9f6, mov eax,[rax+0xDC], RAX=0).
+# Measured on device 2026-09-30: direct hw:0,0 -> page fault; dmix -> no fault, game
+# reaches vkd3d feature-level init and shader compilation.
+# Keep dmix as the shipped default.  A direct route may be added as an explicit
+# developer experiment, never as the default.
+pcm.!default { type plug  slave.pcm "dmix" }
+ctl.!default { type hw    card 0 }
