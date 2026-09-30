@@ -174,13 +174,6 @@ setup_vulkan_env() {
     rm -f /tmp/animalwell-loader/libvulkan.so.1 2>/dev/null || true
     mkdir -p /tmp/animalwell-loader
     LOADER_PICK=
-    # AW_VK_LOADER=<path> forces a specific loader (A/B after the winevulkan
-    # assertion crash at loader.c:668); unset = the bundled 1.2.131 pick below.
-    if [ -n "${AW_VK_LOADER:-}" ] && [ -e "${AW_VK_LOADER}" ]; then
-        ln -sf "${AW_VK_LOADER}" /tmp/animalwell-loader/libvulkan.so.1
-        LOADER_PICK=/tmp/animalwell-loader
-        log "loader_source=$AW_VK_LOADER (forced via AW_VK_LOADER)"
-    else
     for cand in "$T14/deps/libvulkan.so.1" \
         /mnt/UDISK/xorg-libs/usr/lib/aarch64-linux-gnu/libvulkan.so.1 \
         /usr/lib/libvulkan.so.1; do
@@ -191,7 +184,6 @@ setup_vulkan_env() {
             break
         fi
     done
-    fi
 
     mkdir -p "$MALIDIR"
     MALI_SO=$(ls -1 /usr/lib/libmali.so.0* 2>/dev/null | head -1 || true)
