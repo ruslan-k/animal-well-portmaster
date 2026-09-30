@@ -417,6 +417,16 @@ display_usable() {
 }
 
 ensure_display() {
+    # Port-owned X config: its Monitor section declares a real Modeline so that
+    # XRandR reports a mode with a non-zero dotClock (60 Hz) instead of the
+    # fbdev "current" mode (dotClock=0 -> refresh 0 Hz).  With the zero-rate
+    # mode wine derives garbage monitor/virtual rects, places the game client
+    # window off-screen, and the Mali wrapper presents into that invisible
+    # window (black panel while frames are rendered).
+    if [ -z "$XORG_CONFIG" ] && [ -f "$ROOT/xorg-aw.conf" ]; then
+        XORG_CONFIG="$ROOT/xorg-aw.conf"
+        log "using port-owned X config with explicit mode: $XORG_CONFIG"
+    fi
     discover_xorg_runtime_paths
     if [ -n "${DISPLAY:-}" ] && display_usable "$DISPLAY"; then
         log "using inherited X display $DISPLAY"
@@ -739,7 +749,22 @@ log "--- Wine version ---"
 # wineserver, so this must run after it; the template's RpcSs entry then lets
 # rpcss start on demand. wineserver -k cleans it up with the session.
 log "--- service control manager (COM/RPC bootstrap) ---"
-"$BOX64" "$WINE" 'C:\windows\system32\services.exe' >>"$LOGDIR/services.log" 2>&1 &
+# Opt-in: services.exe (SCM) was added for the game COM/RPC init, but it is
+# NOT required to reach the title screen: measured 2026-09-30 the game runs with
+# it disabled.  It costs a whole extra wine session (start.exe + services.exe +
+# svchost.exe + rpcss.exe hold 400-500 MB of live memory, mostly SWAP here).
+# Set AW_SCM=1 to restore it.
+if [ "${AW_SCM:-0}" = 1 ]; then
+    if [ "${AW_SCM:-0}" = 1 ]; then
+    # Opt-in only: measured 2026-09-30 -- this SCM session is NOT needed by
+    # Animal Well (zero RPC_S_SERVER_UNAVAILABLE without it) and it keeps
+    # start.exe/services.exe/svchost.exe/rpcss.exe alive holding 400-560 MB
+    # of live memory, mostly SWAP.  That drove the 1 GB device into swap
+    # exhaustion, after which any kernel page allocation triggered the OOM
+    # killer and the game (biggest task) was SIGKILLed during loading.
+    "$BOX64" "$WINE" 'C:\windows\system32\services.exe' >>"$LOGDIR/services.log" 2>&1 &
+fi
+fi
 SCM_OK=0
 _i=0
 while [ "$_i" -lt 20 ]; do
@@ -765,9 +790,54 @@ fi
 export VKD3D_DEBUG=${VKD3D_DEBUG:-warn}
 export VKD3D_LOG_FILE="$LOGDIR/vkd3d-game.log"
 
+# NOTE 2026-09-30: hiding wine's virtual-desktop caption by MOVING the desktop
+# window was tried and rejected -- the move makes wine recompute window geometry
+# and it takes the garbage path: with an early move the game stalls on the splash,
+# with a move after the surface exists it reaches the menu but stops drawing the
+# menu items.  The caption must be shrunk statically instead (wine window
+# metrics / theme), i.e. without any window movement.
+
+
+# (desktopfit helper reverted: it needs sane-value filtering against wine's
+#  occasional garbage window coordinates before it can be enabled automatically)
+
+
+# --- pre-launch hygiene: kill wine leftovers of previous runs -----------------
+# Measured 2026-09-30: leftovers of killed sessions (start.exe above all) survive
+# and pin 400-560 MB of SWAP with almost no RSS; on this 1 GB device the kernel
+# then cannot satisfy even a single page allocation, the OOM killer fires and
+# takes the game (biggest task) with it during loading.
+for _pid in $(ls /proc | grep '^[0-9]*$'); do
+    _c=$(cat "/proc/$_pid/comm" 2>/dev/null)
+    case "$_c" in
+        start.exe|services.exe|svchost.exe|rpcss.exe|explorer.exe|wineserver|d3d12_smoke.exe)
+            _cl=$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)
+            case "$_cl" in
+                *animalwell*|*"Animal Well"*) log "hygiene: killing leftover $_c pid=$_pid"; kill -9 "$_pid" 2>/dev/null ;;
+            esac
+            ;;
+    esac
+done
+
+# --- extra swap: the shipped 2 GB is consumed by the loading phase; without
+# --- headroom the kernel reaches 0 kB free swap and OOM-kills the game.
+if ! grep -q aw-extra.swap /proc/swaps 2>/dev/null; then
+    if [ ! -f /mnt/UDISK/aw-extra.swap ]; then
+        _freekb=$(df -k /mnt/UDISK 2>/dev/null | awk 'NR==2{print $4}')
+        if [ -n "$_freekb" ] && [ "$_freekb" -gt 2621440 ]; then
+            log "creating 2 GB extra swap on UDISK"
+            dd if=/dev/zero of=/mnt/UDISK/aw-extra.swap bs=1M count=2048 >>"$LOGDIR/swap.log" 2>&1
+            chmod 600 /mnt/UDISK/aw-extra.swap
+            mkswap /mnt/UDISK/aw-extra.swap >>"$LOGDIR/swap.log" 2>&1
+        fi
+    fi
+    [ -f /mnt/UDISK/aw-extra.swap ] && swapon -p 90 /mnt/UDISK/aw-extra.swap 2>>"$LOGDIR/swap.log" \
+        && log "extra swap active"
+fi
+
 cd "$GAME"
 set +e
-"$BOX64" "$WINE" "$EXE"
+"$BOX64" "$WINE" explorer /desktop=aw,1280x720 "$EXE"
 RC=$?
 set -e 2>/dev/null || true
 log "game_exit_code=$RC"
