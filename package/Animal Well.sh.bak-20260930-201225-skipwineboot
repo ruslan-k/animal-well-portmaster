@@ -920,15 +920,6 @@ if [ "${AW_KILL_WINE_SERVICES:-1}" = 1 ]; then
         done
     ) &
 fi
-# The prefix was warmed above with the full box64 environment, so the game's own
-# run does not need wineboot; leaving it enabled only re-raises its modal progress
-# window on the handheld's screen.  (The warm-up still calls wineboot directly -
-# this override is exported after it.)  AW_SKIP_WINEBOOT=0 re-enables it.
-if [ "${AW_SKIP_WINEBOOT:-1}" = 1 ]; then
-    export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};wineboot.exe=d"
-    log "prefix: wineboot disabled for the game run (prefix is warm)"
-fi
-
 # --- controls: TRIMUI pad -> gptokeyb -> uinput "Fake Keyboard" -> Xorg evdev --
 # wine's own pad path (winebus/XInput) does not start under box64 on this device,
 # so the game is driven through its keyboard input.  The mapping lives in

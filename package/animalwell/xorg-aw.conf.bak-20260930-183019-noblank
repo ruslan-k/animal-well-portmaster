@@ -1,8 +1,4 @@
 Section "ServerFlags"
-    Option "BlankTime" "0"
-    Option "StandbyTime" "0"
-    Option "SuspendTime" "0"
-    Option "OffTime" "0"
     Option "DontVTSwitch" "true"
     Option "AutoAddDevices" "true"
     Option "AutoEnableDevices" "true"

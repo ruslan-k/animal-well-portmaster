@@ -667,33 +667,6 @@ fi
 
 setup_prefix || exit 18
 
-# PR review #2: a warm DynaCache restores translated blocks from earlier sessions
-# into live mappings; DC0/DC1/DC2 are run by flipping AW_BOX64_DYNACACHE.
-export BOX64_DYNACACHE="${AW_BOX64_DYNACACHE:-1}"
-export BOX64_LOG=${BOX64_LOG:-1}
-# box64 refuses to launch winedbg by default ("winedbg detected, not launching
-# it!"), so wine's unhandled-exception handler waits forever for a debugger that
-# never attaches and the process deadlocks (a crashed thread keeps holding the
-# heap lock). BOX64_WINEDBG=1 lets box64 launch winedbg; the crash then produces
-# a real backtrace and the process exits cleanly instead of hanging.
-export BOX64_WINEDBG=1
-# Memory-model hardening: OFF by default for speed. The wild-pointer crashes
-# that motivated it were traced to the FAudio 26.09 out-of-bounds mix (fixed by
-# the xaudio2_9 swap); with that root gone the extra atomics only cost frames.
-# AW_HARDEN=1 re-enables the safe set (STRONGMEM=2/BIGBLOCK=1/CALLRET=0 were
-# bisected out: each made even `wine cmd /c ver` die with SIGKILL at exit).
-if [ -n "${AW_HARDEN:-}" ]; then
-    export BOX64_DYNAREC_STRONGMEM=${BOX64_DYNAREC_STRONGMEM:-1}
-    export BOX64_DYNAREC_ALIGNED_ATOMICS=${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}
-    export BOX64_DYNAREC_SAFEFLAGS=${BOX64_DYNAREC_SAFEFLAGS:-1}
-    export BOX64_DYNAREC_BLEEDING_EDGE=${BOX64_DYNAREC_BLEEDING_EDGE:-0}
-fi
-export BOX64_SHOWSEGV=1
-export BOX64_LD_LIBRARY_PATH="$RT/box64/x64lib:$RT/wine/lib:$RT/wine/lib64${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
-export XDG_CACHE_HOME="$CACHE"
-export VKD3D_SHADER_CACHE_PATH="$CACHE/vkd3d"
-export WINEDEBUG=${WINEDEBUG:--all}
-
 # --- headless prefix warm-up (agent 2026-09-30) ------------------------------
 # The staged prefix is lightweight and uninitialised, so the first `wine` call
 # starts wineboot, whose "The Wine configuration is being updated" dialog is
@@ -747,6 +720,32 @@ export WINEESYNC=0
 export WINEFSYNC=0
 export BOX64_NOBANNER=1
 export BOX64_DYNAREC=1
+# PR review #2: a warm DynaCache restores translated blocks from earlier sessions
+# into live mappings; DC0/DC1/DC2 are run by flipping AW_BOX64_DYNACACHE.
+export BOX64_DYNACACHE="${AW_BOX64_DYNACACHE:-1}"
+export BOX64_LOG=${BOX64_LOG:-1}
+# box64 refuses to launch winedbg by default ("winedbg detected, not launching
+# it!"), so wine's unhandled-exception handler waits forever for a debugger that
+# never attaches and the process deadlocks (a crashed thread keeps holding the
+# heap lock). BOX64_WINEDBG=1 lets box64 launch winedbg; the crash then produces
+# a real backtrace and the process exits cleanly instead of hanging.
+export BOX64_WINEDBG=1
+# Memory-model hardening: OFF by default for speed. The wild-pointer crashes
+# that motivated it were traced to the FAudio 26.09 out-of-bounds mix (fixed by
+# the xaudio2_9 swap); with that root gone the extra atomics only cost frames.
+# AW_HARDEN=1 re-enables the safe set (STRONGMEM=2/BIGBLOCK=1/CALLRET=0 were
+# bisected out: each made even `wine cmd /c ver` die with SIGKILL at exit).
+if [ -n "${AW_HARDEN:-}" ]; then
+    export BOX64_DYNAREC_STRONGMEM=${BOX64_DYNAREC_STRONGMEM:-1}
+    export BOX64_DYNAREC_ALIGNED_ATOMICS=${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}
+    export BOX64_DYNAREC_SAFEFLAGS=${BOX64_DYNAREC_SAFEFLAGS:-1}
+    export BOX64_DYNAREC_BLEEDING_EDGE=${BOX64_DYNAREC_BLEEDING_EDGE:-0}
+fi
+export BOX64_SHOWSEGV=1
+export BOX64_LD_LIBRARY_PATH="$RT/box64/x64lib:$RT/wine/lib:$RT/wine/lib64${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+export XDG_CACHE_HOME="$CACHE"
+export VKD3D_SHADER_CACHE_PATH="$CACHE/vkd3d"
+export WINEDEBUG=${WINEDEBUG:--all}
 
 log "--- cpu preset + swap priorities ---"
 cpu_preset_apply
@@ -920,15 +919,6 @@ if [ "${AW_KILL_WINE_SERVICES:-1}" = 1 ]; then
         done
     ) &
 fi
-# The prefix was warmed above with the full box64 environment, so the game's own
-# run does not need wineboot; leaving it enabled only re-raises its modal progress
-# window on the handheld's screen.  (The warm-up still calls wineboot directly -
-# this override is exported after it.)  AW_SKIP_WINEBOOT=0 re-enables it.
-if [ "${AW_SKIP_WINEBOOT:-1}" = 1 ]; then
-    export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};wineboot.exe=d"
-    log "prefix: wineboot disabled for the game run (prefix is warm)"
-fi
-
 # --- controls: TRIMUI pad -> gptokeyb -> uinput "Fake Keyboard" -> Xorg evdev --
 # wine's own pad path (winebus/XInput) does not start under box64 on this device,
 # so the game is driven through its keyboard input.  The mapping lives in
