@@ -520,7 +520,7 @@ ensure_display() {
     return 1
 }
 
-base_overrides='winemenubuilder.exe=d;mscoree=d;mshtml=d'
+base_overrides='winemenubuilder.exe=d;mscoree=;mshtml='  # empty value = do not offer the Mono/Gecko installers (wine FAQ form); mscoree previously '=d' still let wineboot pop the Wine Mono Installer dialog
 # Audio-off A/B: AW_NO_AUDIO=1 disables the bundled XAudio2 (FAudio) so the
 # game's audio init fails cleanly - used to isolate the FAudio mix crash
 # (wild buffer pointers) from the graphics path.
@@ -661,6 +661,16 @@ if [ "$PM_READY" = 1 ] && command -v pm_platform_helper >/dev/null 2>&1; then
 fi
 
 setup_prefix || exit 18
+
+# Never let wineboot offer the Mono/Gecko installers (they are modal dialogs on
+# a handheld).  Both the env form and the prefix registry carry the overrides:
+# wineboot runs before the port's own WINEDLLOVERRIDES branch would set them.
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree=;mshtml=;winemenubuilder.exe=disabled}"
+# Audio path note (agent 2026-09-30): the ALSA route is configured in the
+# device HOME config (/mnt/SDCARD/.asoundrc), NOT via ALSA_CONFIG_PATH: that
+# variable REPLACES the system alsa.conf, which drops the plugin definitions
+# ("Unknown PCM hw:0,0") and makes winealsa fail to open -> total silence.
+
 
 export WINEPREFIX="$PFX"
 export WINEARCH=win64
@@ -835,9 +845,44 @@ if ! grep -q aw-extra.swap /proc/swaps 2>/dev/null; then
         && log "extra swap active"
 fi
 
+# --- drop the kernel page cache before the game (agent 2026-09-30) -----------
+# Measured: the device reaches the game with only ~110 MB available and ~180 MB
+# of slab; the game then lives largely in swap, so every reclaim costs I/O.  A
+# synchronous cache drop right before the game starts gives those pages back.
+if [ "${AW_DROP_CACHES:-1}" = 1 ]; then
+    sync
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null && log "hygiene: dropped page cache before the game"
+fi
+
+# --- reclaim the inessential wine session processes (agent 2026-09-30) -------
+# services/plugplay/svchost/rpcss hold ~350 MB of SWAP together with a tiny RSS
+# and the game does not need them (measured: it reaches the menu without the
+# port's own SCM bootstrap; its RPC calls fail harmlessly).  explorer.exe is
+# NOT touched - it is the virtual desktop the presentation depends on.
+# AW_KILL_WINE_SERVICES=0 disables this step.
+if [ "${AW_KILL_WINE_SERVICES:-1}" = 1 ]; then
+    (
+        i=0
+        while [ $i -lt 90 ]; do
+            if ps | grep -q "Animal Well\.exe"; then
+                sleep 25
+                for nm in services.exe plugplay.exe svchost.exe rpcss.exe; do
+                    for p in $(ps | grep "[${nm%%.*}]" | grep -viE "grep|explorer" | awk '{print $1}'); do
+                        c=$(cat /proc/$p/comm 2>/dev/null)
+                        [ "$c" = "$nm" ] || continue
+                        log "reclaim: stopping inessential wine process $c pid=$p"
+                        kill -TERM "$p" 2>/dev/null || kill -9 "$p" 2>/dev/null
+                    done
+                done
+                break
+            fi
+            sleep 2; i=$((i+2))
+        done
+    ) &
+fi
 cd "$GAME"
 set +e
-"$BOX64" "$WINE" explorer /desktop=aw,1280x720 "$EXE"
+"$BOX64" "$WINE" "$EXE"
 RC=$?
 set -e 2>/dev/null || true
 log "game_exit_code=$RC"
