@@ -694,44 +694,6 @@ export XDG_CACHE_HOME="$CACHE"
 export VKD3D_SHADER_CACHE_PATH="$CACHE/vkd3d"
 export WINEDEBUG=${WINEDEBUG:--all}
 
-# --- compressed swap: keep the hot pages in RAM (memory A/B, PR review) -------
-# Measured 2026-09-30: the game holds ~200 MB resident + ~520 MB swapped and the
-# mandatory explorer.exe another ~100 MB; at the stock 493 MB zram the device
-# overflows the compressed swap and pages to the slow UDISK/SD files, which shows
-# up as FPS dips and audio dropouts.  Ensure zram0 is at least AW_ZRAM_SIZE
-# (default 1 GiB) and raise the watermark floor so kswapd acts early.
-if [ "${AW_ZRAM_SIZE:-$((1024*1024*1024))}" -gt "$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)" ] 2>/dev/null; then
-    _OLD_ZRAM=$(cat /sys/block/zram0/disksize 2>/dev/null)
-    log "memory: growing zram0 $_OLD_ZRAM -> ${AW_ZRAM_SIZE:-1073741824}"
-    if swapoff /dev/zram0 2>/dev/null && echo 1 > /sys/block/zram0/reset 2>/dev/null \
-       && echo "${AW_ZRAM_SIZE:-1073741824}" > /sys/block/zram0/disksize 2>/dev/null \
-       && mkswap /dev/zram0 >/dev/null 2>&1 && swapon -p 200 /dev/zram0 2>/dev/null; then
-        log "memory: zram0 now $(cat /sys/block/zram0/disksize) bytes at prio 200"
-    else
-        log "memory: zram resize failed - restoring"
-        swapoff /dev/zram0 2>/dev/null || true
-        echo 1 > /sys/block/zram0/reset 2>/dev/null || true
-        [ -n "$_OLD_ZRAM" ] && echo "$_OLD_ZRAM" > /sys/block/zram0/disksize 2>/dev/null
-        mkswap /dev/zram0 >/dev/null 2>&1 || true
-        swapon -p 200 /dev/zram0 2>/dev/null || true
-    fi
-fi
-[ "$(cat /proc/sys/vm/min_free_kbytes 2>/dev/null || echo 0)" -lt 32768 ] 2>/dev/null && sysctl -w vm.min_free_kbytes=32768 >/dev/null 2>&1
-[ "$(cat /proc/sys/vm/swappiness 2>/dev/null || echo 0)" -lt 150 ] 2>/dev/null && sysctl -w vm.swappiness=150 >/dev/null 2>&1
-
-cd "$GAME"
-set +e
-"$BOX64" "$WINE" "$EXE"
-RC=$?
-set -e 2>/dev/null || true
-log "game_exit_code=$RC"
-
-if [ "$RC" -ne 0 ]; then
-    log "game failed; collecting diagnostics"
-    "$ROOT/diagnose.sh" --collect-only "$RC" || true
-fi
-exit "$RC"
-
 # --- headless prefix warm-up (agent 2026-09-30) ------------------------------
 # The staged prefix is lightweight and uninitialised, so the first `wine` call
 # starts wineboot, whose "The Wine configuration is being updated" dialog is
@@ -961,9 +923,8 @@ fi
 # The prefix was warmed above with the full box64 environment, so the game's own
 # run does not need wineboot; leaving it enabled only re-raises its modal progress
 # window on the handheld's screen.  (The warm-up still calls wineboot directly -
-# this override is exported after it.)  Default 0: measured 2026-09-30, with it
-# enabled the run died (winedbg, no game) so wineboot stays on until that is understood.
-if [ "${AW_SKIP_WINEBOOT:-0}" = 1 ]; then
+# this override is exported after it.)  AW_SKIP_WINEBOOT=0 re-enables it.
+if [ "${AW_SKIP_WINEBOOT:-1}" = 1 ]; then
     export WINEDLLOVERRIDES="${WINEDLLOVERRIDES};wineboot.exe=d"
     log "prefix: wineboot disabled for the game run (prefix is warm)"
 fi
@@ -983,3 +944,40 @@ if [ "${AW_GPTOKEYB:-1}" = 1 ]; then
     fi
 fi
 
+# --- compressed swap: keep the hot pages in RAM (memory A/B, PR review) -------
+# Measured 2026-09-30: the game holds ~200 MB resident + ~520 MB swapped and the
+# mandatory explorer.exe another ~100 MB; at the stock 493 MB zram the device
+# overflows the compressed swap and pages to the slow UDISK/SD files, which shows
+# up as FPS dips and audio dropouts.  Ensure zram0 is at least AW_ZRAM_SIZE
+# (default 1 GiB) and raise the watermark floor so kswapd acts early.
+if [ "${AW_ZRAM_SIZE:-$((1024*1024*1024))}" -gt "$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)" ] 2>/dev/null; then
+    _OLD_ZRAM=$(cat /sys/block/zram0/disksize 2>/dev/null)
+    log "memory: growing zram0 $_OLD_ZRAM -> ${AW_ZRAM_SIZE:-1073741824}"
+    if swapoff /dev/zram0 2>/dev/null && echo 1 > /sys/block/zram0/reset 2>/dev/null \
+       && echo "${AW_ZRAM_SIZE:-1073741824}" > /sys/block/zram0/disksize 2>/dev/null \
+       && mkswap /dev/zram0 >/dev/null 2>&1 && swapon -p 200 /dev/zram0 2>/dev/null; then
+        log "memory: zram0 now $(cat /sys/block/zram0/disksize) bytes at prio 200"
+    else
+        log "memory: zram resize failed - restoring"
+        swapoff /dev/zram0 2>/dev/null || true
+        echo 1 > /sys/block/zram0/reset 2>/dev/null || true
+        [ -n "$_OLD_ZRAM" ] && echo "$_OLD_ZRAM" > /sys/block/zram0/disksize 2>/dev/null
+        mkswap /dev/zram0 >/dev/null 2>&1 || true
+        swapon -p 200 /dev/zram0 2>/dev/null || true
+    fi
+fi
+[ "$(cat /proc/sys/vm/min_free_kbytes 2>/dev/null || echo 0)" -lt 32768 ] 2>/dev/null && sysctl -w vm.min_free_kbytes=32768 >/dev/null 2>&1
+[ "$(cat /proc/sys/vm/swappiness 2>/dev/null || echo 0)" -lt 150 ] 2>/dev/null && sysctl -w vm.swappiness=150 >/dev/null 2>&1
+
+cd "$GAME"
+set +e
+"$BOX64" "$WINE" "$EXE"
+RC=$?
+set -e 2>/dev/null || true
+log "game_exit_code=$RC"
+
+if [ "$RC" -ne 0 ]; then
+    log "game failed; collecting diagnostics"
+    "$ROOT/diagnose.sh" --collect-only "$RC" || true
+fi
+exit "$RC"
