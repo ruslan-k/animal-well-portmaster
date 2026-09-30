@@ -98,7 +98,12 @@ cleanup() {
     rc=$?
     trap - EXIT HUP INT TERM 2>/dev/null || true
     if [ -x "$BOX64" ] && [ -x "$WINESERVER" ]; then
-        "$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
+            if [ -n "${GPTK_PID:-}" ]; then
+        kill "$GPTK_PID" 2>/dev/null || true
+        wait "$GPTK_PID" 2>/dev/null || true
+        log "controls: gptokeyb pid=$GPTK_PID stopped"
+    fi
+"$BOX64" "$WINESERVER" -k >/dev/null 2>&1 || true
         sleep 1
     fi
     rm -rf "$PFX" 2>/dev/null || true
@@ -857,7 +862,7 @@ fi
 # Measured: the device reaches the game with only ~110 MB available and ~180 MB
 # of slab; the game then lives largely in swap, so every reclaim costs I/O.  A
 # synchronous cache drop right before the game starts gives those pages back.
-if [ "${AW_DROP_CACHES:-1}" = 1 ]; then
+if [ "${AW_DROP_CACHES:-0}" = 1 ]; then
     sync
     echo 3 > /proc/sys/vm/drop_caches 2>/dev/null && log "hygiene: dropped page cache before the game"
 fi
@@ -889,6 +894,21 @@ if [ "${AW_KILL_WINE_SERVICES:-1}" = 1 ]; then
         done
     ) &
 fi
+# --- controls: TRIMUI pad -> gptokeyb -> uinput "Fake Keyboard" -> Xorg evdev --
+# wine's own pad path (winebus/XInput) does not start under box64 on this device,
+# so the game is driven through its keyboard input.  The mapping lives in
+# animalwell.gptk next to this script.  AW_GPTOKEYB=0 disables it.
+if [ "${AW_GPTOKEYB:-1}" = 1 ]; then
+    _GPTK_BIN="${controlfolder:-/mnt/SDCARD/Persistent/portmaster/PortMaster}/gptokeyb"
+    if [ -x "$_GPTK_BIN" ] && [ -f "$ROOT/animalwell.gptk" ]; then
+        "$_GPTK_BIN" "Animal Well.exe" -c "$ROOT/animalwell.gptk" >>"$LOGDIR/gptokeyb.log" 2>&1 &
+        GPTK_PID=$!
+        log "controls: gptokeyb started pid=$GPTK_PID mapping=$ROOT/animalwell.gptk"
+    else
+        log "controls: gptokeyb unavailable (bin=$_GPTK_BIN mapping=$ROOT/animalwell.gptk)"
+    fi
+fi
+
 cd "$GAME"
 set +e
 "$BOX64" "$WINE" "$EXE"

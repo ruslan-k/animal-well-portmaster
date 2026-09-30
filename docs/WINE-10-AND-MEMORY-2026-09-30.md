@@ -86,6 +86,16 @@ Measures, both reversible and gated:
   immediately before the game starts, so the pages the game needs can come back
   into RAM instead of being paged from swap.
 
+### Page-cache drop: measured, and now off by default
+
+`AW_DROP_CACHES` was added on the theory that giving the pages back before the
+game starts would help.  Measured on the device: with it enabled the game
+**stalls on its splash screen** (static picture, no menu) because the asset
+loading then reads from cold storage; with `AW_DROP_CACHES=0` the same launcher
+reaches the menu and the picture animates (8 distinct `kmsgrab` frames, app
+alive, MainUI down).  The default is therefore **0** — exactly the trap the PR
+review warned about ("it can also make the first post-launch accesses colder").
+
 ## Audio (still open)
 
 * The card runs at 96 kHz with `period_size 960` (10 ms) / `buffer_size 3840`
