@@ -638,7 +638,7 @@ select_backend() {
 }
 
 log "=== ANIMAL WELL PortMaster Windows runtime ==="
-log "launcher_version=2026-09-29.15"
+log "launcher_version=2026-09-30.1"
 log "changes: box64 STRONGMEM=1+ALIGNED_ATOMICS+SAFEFLAGS+BLEEDING_EDGE=0 (bisected-safe set) + SHOWSEGV; BOX64_WINEDBG=1 (real crash handling); SCM bootstrap (services.exe, final session) for COM/RPC; bundled 1.2.131 loader pick (xlib WSI); wrapper ICD + phys-dev export; WSI_X11_FORCE_SHM; totono Xorg; display-first order; no3d renderer; harness-shaped display seed; stage-wise probes; watchdog run_timeout"
 log "self=$SELF"
 log "root=$ROOT"
@@ -671,6 +671,20 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree=;mshtml=;winemenubuilder.ex
 # variable REPLACES the system alsa.conf, which drops the plugin definitions
 # ("Unknown PCM hw:0,0") and makes winealsa fail to open -> total silence.
 
+
+# --- audio route (AW_ALSA_DIRECT) --------------------------------------------
+# AW_ALSA_DIRECT=1 makes the port own the audio route: a private HOME holding the
+# validated direct-hw .asoundrc plus an ALSA_CONFIG_PATH list that KEEPS the
+# system definitions.  Never set ALSA_CONFIG_PATH without the system alsa.conf in
+# the list - it replaces the system config and winealsa then cannot open any
+# device (measured: 'Unknown PCM hw:0,0' -> total silence).
+if [ "${AW_ALSA_DIRECT:-0}" = 1 ] && [ -f "$ROOT/audio-home/.asoundrc" ]; then
+    export HOME="$ROOT/audio-home"
+    export ALSA_CONFIG_PATH="/usr/share/alsa/alsa.conf:$ROOT/asound.conf${ALSA_CONFIG_PATH:+:$ALSA_CONFIG_PATH}"
+    log "audio route: direct hw (HOME=$HOME ALSA_CONFIG_PATH=$ALSA_CONFIG_PATH)"
+else
+    log "audio route: device default (AW_ALSA_DIRECT=${AW_ALSA_DIRECT:-0})"
+fi
 
 export WINEPREFIX="$PFX"
 export WINEARCH=win64
@@ -759,12 +773,6 @@ log "--- Wine version ---"
 # wineserver, so this must run after it; the template's RpcSs entry then lets
 # rpcss start on demand. wineserver -k cleans it up with the session.
 log "--- service control manager (COM/RPC bootstrap) ---"
-# Opt-in: services.exe (SCM) was added for the game COM/RPC init, but it is
-# NOT required to reach the title screen: measured 2026-09-30 the game runs with
-# it disabled.  It costs a whole extra wine session (start.exe + services.exe +
-# svchost.exe + rpcss.exe hold 400-500 MB of live memory, mostly SWAP here).
-# Set AW_SCM=1 to restore it.
-if [ "${AW_SCM:-0}" = 1 ]; then
     if [ "${AW_SCM:-0}" = 1 ]; then
     # Opt-in only: measured 2026-09-30 -- this SCM session is NOT needed by
     # Animal Well (zero RPC_S_SERVER_UNAVAILABLE without it) and it keeps
@@ -773,8 +781,6 @@ if [ "${AW_SCM:-0}" = 1 ]; then
     # exhaustion, after which any kernel page allocation triggered the OOM
     # killer and the game (biggest task) was SIGKILLed during loading.
     "$BOX64" "$WINE" 'C:\windows\system32\services.exe' >>"$LOGDIR/services.log" 2>&1 &
-fi
-fi
 SCM_OK=0
 _i=0
 while [ "$_i" -lt 20 ]; do
@@ -788,7 +794,9 @@ else
     log "WARNING SCM not visible after 20s"
     tail -10 "$LOGDIR/services.log" 2>/dev/null || true
 fi
-
+else
+    log "SCM disabled (verified Animal Well path: zero RPC_S_SERVER_UNAVAILABLE without it)"
+fi
 harden_prefix_for_wine
 log "--- starting game ---"
 log "backend=$BACKEND display=${DISPLAY:-unset} wayland=${WAYLAND_DISPLAY:-unset}"
@@ -858,7 +866,8 @@ fi
 # services/plugplay/svchost/rpcss hold ~350 MB of SWAP together with a tiny RSS
 # and the game does not need them (measured: it reaches the menu without the
 # port's own SCM bootstrap; its RPC calls fail harmlessly).  explorer.exe is
-# NOT touched - it is the virtual desktop the presentation depends on.
+# NOT touched (Wine-11 virtual-desktop fallback; the wine-10 plain window
+# does not need it - see docs/WINE-10-AND-MEMORY-2026-09-30.md).
 # AW_KILL_WINE_SERVICES=0 disables this step.
 if [ "${AW_KILL_WINE_SERVICES:-1}" = 1 ]; then
     (

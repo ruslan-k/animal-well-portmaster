@@ -1,3 +1,9 @@
+> **SUPERSEDED by docs/WINE-10-AND-MEMORY-2026-09-30.md.** This note records
+> the wine 11.18 state: the virtual desktop was required *because* wine 11.x's
+> client-surface model produced garbage client rects on this fbdev X.  The port
+> now runs on wine 10.0 with a plain window, so the virtual desktop, its caption
+> and the ALSA_CONFIG_PATH candidate below are historical.
+
 # Animal Well on TSPS (Longan / SpruceOS) — verified launch, 2026-09-30
 
 Status: **the port reaches the game's title screen on the device.** Verified with

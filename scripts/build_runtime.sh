@@ -4,8 +4,15 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-"$ROOT/.work"}
 OUT=${OUT:-"$ROOT/dist"}
 BOX64_REF=${BOX64_REF:-v0.4.4}
-WINE_VER=${WINE_VER:-11.18}
-WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba}
+WINE_VER=${WINE_VER:-10.0}
+# The verified runtime is wine 10.0 (see docs/WINE-10-AND-MEMORY-2026-09-30.md:
+# wine 11.x's client-surface window model is what broke geometry on this fbdev X).
+# Each pinned version carries its own archive sha256; pass WINE_SHA for anything else.
+case "$WINE_VER" in
+  10.0)  WINE_SHA=${WINE_SHA:-aeebbbf239e548f0136f1cd72a2e109dd9a572a8f703da3c09fa40d74d5c255f} ;;
+  11.18) WINE_SHA=${WINE_SHA:-f899879b8c37e0b20adca19d147cf77436f3f1a37bf16d08d27fa7137a52b9ba} ;;
+  *)     : "${WINE_SHA:?WINE_SHA must be supplied for unpinned WINE_VER=$WINE_VER}" ;;
+esac
 JOBS=${JOBS:-2}
 
 rm -rf "$WORK" "$OUT"
@@ -76,6 +83,14 @@ case "$WINE_VER" in
     WIN32U_PATCH_SHA=ae33290fb4eec697dc93ea0302b2a878eab30db10e4642313e65723f270c2c2b
     WIN32U_EXPECT_SYM=0000000000044940
     WIN32U_EXPECT_PROLOGUE=4883ec08
+    ;;
+  10.0)
+    # pinned from the verified runtime (lib/wine/x86_64-unix/win32u.so of the
+    # Kron4ek 10.0 wow64 archive pinned above)
+    WIN32U_ORIG_SHA=958c182de9dc8d4dcdf9a4391d791391b35ecf3ebb1a121901a9e1ff7cedd6b6
+    WIN32U_PATCH_SHA=df5d4d1a523c7b5539fb9b2d079149e187137aad614116e7e58527e0cac2d780
+    WIN32U_EXPECT_SYM=000000000002c2d0
+    WIN32U_EXPECT_PROLOGUE=55660fef
     ;;
   *)
     WIN32U_ORIG_SHA=${WIN32U_ORIG_SHA:-}

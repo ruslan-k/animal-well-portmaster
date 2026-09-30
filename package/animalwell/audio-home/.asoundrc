@@ -1,0 +1,16 @@
+# agent 2026-09-30: direct hw:0,0 (was dmix) - the skill measured a dmix XRun
+# storm on TSPS.  plug keeps format/rate conversion so winealsa can open
+# (48 kHz stereo -> 96 kHz S32_LE).  Restore the .bak-* file to go back to dmix.
+pcm.!default {
+    type plug
+    slave {
+        pcm "hw:0,0"
+        format S32_LE
+        rate 96000
+    }
+}
+
+ctl.!default {
+    type hw
+    card 0
+}
